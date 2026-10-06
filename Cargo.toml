@@ -19,7 +19,8 @@ include = [
     "/config.example.toml",
     "/src/**",
     "/tests/**",
-    "/web/**",
+    "/web/diff.html",
+    "/web/GATEWAY.md",
 ]
 
 [package.metadata.docs.rs]
