@@ -1,0 +1,79 @@
+[package]
+name = "varynth"
+version = "0.1.0"
+edition = "2021"
+description = "Varynth CLI — OpenClaw-style coding agent with a local dashboard"
+license = "MIT"
+authors = ["ZuziaDev"]
+default-run = "varynth"
+readme = "README.md"
+repository = "https://github.com/ZuziaDev/varynth"
+homepage = "https://github.com/ZuziaDev/varynth"
+keywords = ["ai", "agent", "cli", "coding", "mcp"]
+categories = ["command-line-utilities", "development-tools"]
+include = [
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/LICENSE",
+    "/README.md",
+    "/config.example.toml",
+    "/src/**",
+    "/tests/**",
+    "/web/**",
+]
+
+[package.metadata.docs.rs]
+targets = ["x86_64-pc-windows-msvc"]
+
+[lib]
+name = "varynth"
+path = "src/lib.rs"
+
+[[bin]]
+name = "varynth"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+arboard = "3"
+async-trait = "0.1"
+axum = { version = "0.8", features = ["ws"] }
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive", "env"] }
+crossterm = "0.28"
+dirs = "6"
+glob = "0.3"
+keyring = { version = "3", features = ["windows-native"] }
+png = "0.17"
+ratatui = "0.29"
+regex = "1"
+cron = "0.12"
+enigo = "0.2"
+screenshots = "0.8"
+fuzzy-matcher = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking", "stream"] }
+rustyline = "15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+similar = "2"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+toml = "0.8"
+tower-http = { version = "0.6", features = ["fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+walkdir = "2"
+which = "7"
+
+[dev-dependencies]
+tempfile = "3"
+tokio-test = "0.4"
+tower = { version = "0.5", features = ["util"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

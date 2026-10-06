@@ -1,0 +1,41 @@
+model = "grok-4.7-build"
+provider = "proxy"
+permission_mode = "acceptEdits"
+sandbox = "workspace-write"
+theme = "purple"
+# use_keyring = true
+# docker_image = "varynth-sandbox:latest"
+# docker_network = "none"
+proxy_url = "http://127.0.0.1:8787"
+# proxy_token = "set via VARYNTH_PROXY_TOKEN"
+# OpenAI-compatible endpoint (models: grok-4.5, grok-4.7-build, grok-4.7, grok-4.7-build):
+# provider = "openai"
+# model = "grok-4.7-build"
+# openai_base_url = "https://codex-everywhere.com"
+# openai_api_key = "set via OPENAI_API_KEY"
+# Direct Anthropic endpoint:
+# provider = "anthropic"
+# anthropic_base_url = "https://api.anthropic.com"
+# anthropic_api_key = "set via ANTHROPIC_API_KEY"
+# effort = "xhigh"  # one of: low, medium, high, xhigh, max, ultra
+# max_tokens = 8192  # optional cap on model output tokens
+# temperature = 0.7  # optional sampling temperature
+# goal_max_rounds = 25  # optional cap for /goal loops
+# goal_max_minutes = 30  # optional wall-time cap for /goal
+# stream = true  # set false to disable SSE token streaming
+# add_dirs = ["C:/path/to/extra/workspace"]
+dashboard_host = "127.0.0.1"
+dashboard_port = 7420
+# dashboard_token = "set via VARYNTH_DASHBOARD_TOKEN for remote API access"
+# mcp_config = "C:/path/to/mcp.json"
+# Telegram bot (or set VARYNTH_TELEGRAM_BOT_TOKEN / telegram.env):
+# telegram_bot_token = ""
+telegram_allow_from = ["123456789"]
+# GitHub + Google connectors read env vars only; no config keys for them:
+#   VARYNTH_GITHUB_TOKEN, VARYNTH_GITHUB_ACCOUNT
+#   VARYNTH_GOOGLE_TOKEN, VARYNTH_GOOGLE_ACCOUNT
+max_tool_rounds = 24
+shell_allowlist = [
+  "git", "cargo", "rustc", "npm", "npx", "pnpm", "node",
+  "python", "rg", "powershell", "pwsh", "cmd"
+]

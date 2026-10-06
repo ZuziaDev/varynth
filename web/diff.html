@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Varynth Diff Viewer</title>
+<style>
+:root {
+  --void: #07090b;
+  --panel: #10161c;
+  --line: #1d3a3a;
+  --teal: #2ec4b6;
+  --coral: #ff6b4a;
+  --mist: #c9d6d4;
+  --dim: #6f8582;
+  --ink: #e8f2ef;
+  --accent: #7E57C2;
+  --add-bg: #0d211d;
+  --add-ink: #9fe8df;
+  --del-bg: #26120c;
+  --del-ink: #ffb59e;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; background: var(--void); color: var(--ink);
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif; }
+header { display: flex; align-items: center; gap: 12px; padding: 10px 18px;
+  border-bottom: 1px solid var(--line); }
+.mark { width: 22px; height: 22px; }
+header b { font-weight: 600; letter-spacing: .08em; font-size: 13px; }
+header span { color: var(--dim); font-size: 11px; }
+.controls { padding: 12px 18px; display: flex; gap: 10px; align-items: stretch;
+  border-bottom: 1px solid var(--line); }
+textarea { flex: 1; height: 96px; resize: vertical; background: #0a1014; color: var(--ink);
+  border: 1px solid var(--line); padding: 8px 10px;
+  font: 12px/1.5 "IBM Plex Mono", ui-monospace, monospace; }
+textarea:focus { outline: 1px solid var(--accent); }
+button.go { background: var(--accent); color: #fff; border: 0; padding: 0 20px;
+  font-weight: 650; letter-spacing: .04em; cursor: pointer; }
+button.go:hover { filter: brightness(1.15); }
+button.ghost { background: transparent; color: var(--dim); border: 1px solid var(--line);
+  padding: 0 14px; font-size: 11px; cursor: pointer; }
+button.ghost:hover { color: var(--accent); border-color: var(--accent); }
+.out { flex: 1; overflow: auto; min-height: 0; }
+table { border-collapse: collapse; width: 100%;
+  font: 12px/1.6 "IBM Plex Mono", ui-monospace, monospace; }
+td { vertical-align: top; padding: 0 8px; white-space: pre-wrap; word-break: break-word; }
+td.no { color: #4b5f5c; text-align: right; user-select: none; width: 1%; min-width: 44px; }
+td.sign { user-select: none; width: 1%; color: var(--dim); }
+td.sign.add { color: var(--teal); }
+td.sign.del { color: var(--coral); }
+td.src.add { background: var(--add-bg); color: var(--add-ink); }
+td.src.del { background: var(--del-bg); color: var(--del-ink); }
+tr.hunk td { color: var(--accent); background: #171226; padding-top: 4px; padding-bottom: 4px; }
+tr.file td { color: var(--mist); background: var(--panel); font-weight: 600; }
+td.gap { background: #0b0f12; padding: 0; }
+.empty { color: var(--dim); padding: 24px 18px; font-size: 13px; }
+</style>
+</head>
+<body>
+  <header>
+    <svg class="mark" viewBox="0 0 32 32" aria-hidden="true">
+      <path d="M4 28 L16 4 L28 28" fill="none" stroke="#7E57C2" stroke-width="2.2"/>
+      <circle cx="16" cy="18" r="3" fill="#2ec4b6"/>
+    </svg>
+    <div><b>VARYNTH</b> <span>diff · paste a unified diff or pass ?diff=&lt;urlencoded&gt;</span></div>
+  </header>
+  <div class="controls">
+    <textarea id="input" placeholder="diff --git a/x.rs b/x.rs&#10;--- a/x.rs&#10;+++ b/x.rs&#10;@@ -1,3 +1,4 @@&#10; context&#10;-removed&#10;+added"></textarea>
+    <button type="button" class="go" id="render">RENDER</button>
+    <button type="button" class="ghost" id="example">example</button>
+  </div>
+  <div class="out" id="out"><div class="empty">Nothing to show yet — paste a unified diff above.</div></div>
+<script>
+const HUNK_RE = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+
+function td(cls, text) {
+  const el = document.createElement('td');
+  if (cls) el.className = cls;
+  if (text !== null) el.textContent = text;
+  return el;
+}
+
+// One half of a row: line number, +/- sign, source text. `kind` styles the
+// sign and source cells independently, so a paired row can show a deletion
+// on the left and an addition on the right at the same time.
+function side(kind, no, sign, text) {
+  return [
+    td('no', no),
+    td('sign' + (kind ? ' ' + kind : ''), sign),
+    td('src' + (kind ? ' ' + kind : ''), text),
+  ];
+}
+
+function appendHalf(tr, cells) {
+  for (const el of cells) tr.appendChild(el);
+  tr.appendChild(td('gap', null));
+}
+
+function appendEmptyHalf(tr) {
+  appendHalf(tr, side('', '', '', ''));
+}
+
+// Streaming side-by-side pairing: every '-' row stays open on the right until
+// a '+' arrives to fill the oldest open row; a context line closes all open
+// rows at once.
+function renderDiff(text) {
+  const lines = text.split(/\r?\n/);
+  const tbody = document.createElement('tbody');
+  let oldNo = 0, newNo = 0;
+  let openRows = []; // rows whose right half is empty, waiting for a '+'
+  for (const line of lines) {
+    const hunk = line.match(HUNK_RE);
+    if (hunk) {
+      oldNo = parseInt(hunk[1], 10) - 1;
+      newNo = parseInt(hunk[3], 10) - 1;
+      openRows = [];
+      const tr = document.createElement('tr');
+      tr.className = 'hunk';
+      appendHalf(tr, side('', '', '', ''));
+      appendHalf(tr, side('', '', '', line));
+      tbody.appendChild(tr);
+    } else if (line.startsWith('--- ') || line.startsWith('+++ ')) {
+      openRows = [];
+      const isOld = line.startsWith('--- ');
+      const label = line.slice(4);
+      const tr = document.createElement('tr');
+      tr.className = 'file';
+      if (isOld) {
+        appendHalf(tr, side('', '', '', label));
+        appendEmptyHalf(tr);
+      } else {
+        const last = tbody.lastElementChild;
+        if (last && last.className === 'file' && last.children[6].textContent === '') {
+          last.children[6].textContent = label;
+        } else {
+          appendEmptyHalf(tr);
+          appendHalf(tr, side('', '', '', label));
+        }
+        tbody.appendChild(tr);
+      }
+      if (isOld) tbody.appendChild(tr);
+      openRows = [];
+    } else if (
+      line.startsWith('diff ') || line.startsWith('index ') ||
+      line.startsWith('old mode') || line.startsWith('new mode') ||
+      line.startsWith('new file') || line.startsWith('deleted file') ||
+      line.startsWith('rename ') || line.startsWith('similarity') ||
+      line.startsWith('Binary files')
+    ) {
+      openRows = [];
+      const tr = document.createElement('tr');
+      tr.className = 'file';
+      appendHalf(tr, side('', '', '', ''));
+      appendHalf(tr, side('', '', '', line));
+      tbody.appendChild(tr);
+    } else if (line.startsWith('-')) {
+      oldNo++;
+      const tr = document.createElement('tr');
+      appendHalf(tr, side('del', oldNo, '-', line.slice(1)));
+      appendEmptyHalf(tr);
+      tbody.appendChild(tr);
+      openRows.push(tr);
+    } else if (line.startsWith('+')) {
+      newNo++;
+      const openRow = openRows.shift();
+      if (openRow) {
+        // Row layout: [no, sign, src, gap | no, sign, src, gap] — fill the
+        // right half (indices 4-6) with the addition.
+        const cells = side('add', newNo, '+', line.slice(1));
+        openRow.replaceChild(cells[0], openRow.children[4]);
+        openRow.replaceChild(cells[1], openRow.children[5]);
+        openRow.replaceChild(cells[2], openRow.children[6]);
+      } else {
+        const tr = document.createElement('tr');
+        appendEmptyHalf(tr);
+        appendHalf(tr, side('add', newNo, '+', line.slice(1)));
+        tbody.appendChild(tr);
+      }
+    } else if (line.startsWith(' ') || line === '') {
+      openRows = [];
+      oldNo++;
+      newNo++;
+      const tr = document.createElement('tr');
+      appendHalf(tr, side('', oldNo, '', line.slice(1)));
+      appendHalf(tr, side('', newNo, '', line.slice(1)));
+      tbody.appendChild(tr);
+    } else if (line.startsWith('\\')) {
+      // "\ No newline at end of file"
+      openRows = [];
+      const tr = document.createElement('tr');
+      tr.className = 'hunk';
+      appendHalf(tr, side('', '', '', ''));
+      appendHalf(tr, side('', '', '', line));
+      tbody.appendChild(tr);
+    } else {
+      openRows = [];
+      const tr = document.createElement('tr');
+      tr.className = 'file';
+      appendHalf(tr, side('', '', '', line));
+      appendEmptyHalf(tr);
+      tbody.appendChild(tr);
+    }
+  }
+  const table = document.createElement('table');
+  table.appendChild(tbody);
+  const out = document.getElementById('out');
+  out.innerHTML = '';
+  out.appendChild(table);
+  out.scrollTop = 0;
+}
+
+function renderFromBox() {
+  const text = document.getElementById('input').value;
+  if (!text.trim()) {
+    document.getElementById('out').innerHTML =
+      '<div class="empty">Nothing to show yet — paste a unified diff above.</div>';
+    return;
+  }
+  renderDiff(text);
+}
+
+document.getElementById('render').onclick = renderFromBox;
+document.getElementById('input').addEventListener('keydown', function (e) {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') renderFromBox();
+});
+
+document.getElementById('example').onclick = function () {
+  document.getElementById('input').value = [
+    'diff --git a/src/gateway.rs b/src/gateway.rs',
+    '--- a/src/gateway.rs',
+    '+++ b/src/gateway.rs',
+    '@@ -1,5 +1,6 @@',
+    ' //! WebSocket agent gateway',
+    ' use axum::Router;',
+    '+pub const EVENT_CAPACITY: usize = 1024;',
+    '+pub const RELAY_CAPACITY: usize = 64;',
+    ' ',
+    ' impl Gateway {',
+    '     fn route() -> &\'static str {'
+  ].join('\n');
+  renderFromBox();
+};
+
+// ?diff=<urlencoded unified diff> renders on load.
+const passed = new URLSearchParams(location.search).get('diff');
+if (passed) {
+  document.getElementById('input').value = passed;
+  renderFromBox();
+}
+</script>
+</body>
+</html>
