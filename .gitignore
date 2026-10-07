@@ -1,6 +1,10 @@
 /target/
 /target-release-check/
 /dist/
+/docs/
+/VARYNTH.md
+/.impeccable/
+/gui-test-screenshots/
 /.varynth/
 /.zcode/
 /.zcodeignore

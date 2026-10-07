@@ -2,7 +2,7 @@
 name = "varynth"
 version = "0.1.0"
 edition = "2021"
-description = "Varynth CLI — OpenClaw-style coding agent with a local dashboard"
+description = "Varynth local coding workspace with a TUI, secure tools, MCP, goals and an operator dashboard"
 license = "MIT"
 authors = ["ZuziaDev"]
 default-run = "varynth"
@@ -21,6 +21,7 @@ include = [
     "/tests/**",
     "/web/diff.html",
     "/web/GATEWAY.md",
+    "/web/index.html",
 ]
 
 [package.metadata.docs.rs]
