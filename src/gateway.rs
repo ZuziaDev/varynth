@@ -317,18 +317,25 @@ fn str_param(params: &Value, key: &str) -> Result<String, String> {
 async fn status_payload(ctx: &GatewayCtx) -> Value {
     {
         let snap = ctx.snap.read().await;
-        let mut status = snap.status.clone();
+        let status = snap.status.clone();
         if !status.is_null() {
-            if let Some(obj) = status.as_object_mut() {
-                obj.insert("busy".into(), json!(snap.busy));
-            }
-            return status;
+            return if ctx.live.is_some() {
+                crate::dashboard::live_status(status, snap.busy)
+            } else {
+                let mut status = status;
+                if let Some(obj) = status.as_object_mut() {
+                    obj.insert("busy".into(), json!(snap.busy));
+                }
+                status
+            };
         }
     }
     match &ctx.live {
         Some(inner) => {
-            let g = inner.lock().await;
-            g.runtime.status_json(Some(&g.session))
+            let Ok(g) = inner.try_lock() else {
+                return json!({ "ok": false, "error": "runtime busy; status unavailable" });
+            };
+            crate::dashboard::live_status(g.runtime.status_json(Some(&g.session)), false)
         }
         None => json!({}),
     }
@@ -343,7 +350,9 @@ async fn models_payload(ctx: &GatewayCtx) -> Value {
     }
     match &ctx.live {
         Some(inner) => {
-            let g = inner.lock().await;
+            let Ok(g) = inner.try_lock() else {
+                return json!({ "ok": false, "error": "runtime busy; retry after the active turn" });
+            };
             match g.runtime.list_models().await {
                 Ok(models) => json!({ "ok": true, "models": models }),
                 Err(e) => json!({ "ok": false, "error": e.to_string() }),
@@ -355,12 +364,15 @@ async fn models_payload(ctx: &GatewayCtx) -> Value {
 
 fn session_payload(id: &str) -> Value {
     match Session::load(id) {
-        Ok(s) => json!({
-            "ok": true,
-            "meta": s.meta,
-            "messages": s.messages,
-            "unread": crate::mailbox::Bus::default().unread(id).len(),
-        }),
+        Ok(s) => crate::dashboard::with_paused(
+            json!({
+                "ok": true,
+                "meta": s.meta,
+                "messages": s.messages,
+                "unread": crate::mailbox::Bus::default().unread(id).len(),
+            }),
+            id,
+        ),
         Err(e) => json!({ "ok": false, "error": e.to_string() }),
     }
 }
@@ -376,14 +388,15 @@ async fn set_model(ctx: &GatewayCtx, model: &str) -> Result<(), String> {
     let Some(inner) = &ctx.live else {
         return Err("gateway has no live runtime".into());
     };
-    let mut g = inner.lock().await;
+    let Ok(mut g) = inner.try_lock() else {
+        return Err("runtime busy; cannot change model during an active turn".into());
+    };
     let mut cfg = g.runtime.cfg.clone();
     cfg.model = model.to_string();
     g.runtime
         .reconfigure(cfg)
         .map_err(|error| error.to_string())?;
     let status = g.runtime.status_json(Some(&g.session));
-    drop(g);
     let mut snap = ctx.snap.write().await;
     snap.status = status;
     Ok(())

@@ -7,7 +7,7 @@ use axum::routing::{get, post};
 use axum::{http::StatusCode, Json, Router};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
-use std::path::PathBuf;
+use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -63,23 +63,22 @@ pub(crate) fn broadcast_event(tx: &broadcast::Sender<String>, session: &str, ev:
 
 impl AppState {
     pub async fn turn(&self, message: &str) -> anyhow::Result<String> {
-        {
-            let mut s = self.snap.write().await;
-            s.busy = true;
-        }
         let mut g = self.inner.lock().await;
+        self.refresh_snapshot(&g, true).await;
         let Inner { runtime, session } = &mut *g;
         let sid = session.id().to_string();
         let tx = self.events.clone();
         let result = runtime
             .turn(session, message, |ev| broadcast_event(&tx, &sid, &ev))
             .await;
-        let status = runtime.status_json(Some(session));
-        drop(g);
-        let mut s = self.snap.write().await;
-        s.status = status;
-        s.busy = false;
+        self.refresh_snapshot(&g, false).await;
         result
+    }
+
+    async fn refresh_snapshot(&self, inner: &Inner, busy: bool) {
+        let mut snap = self.snap.write().await;
+        snap.status = inner.runtime.status_json(Some(&inner.session));
+        snap.busy = busy;
     }
 
     /// `{"ok":true,"sessions":[…]}` payload behind `GET /api/sessions`,
@@ -94,7 +93,7 @@ impl AppState {
     pub(crate) async fn session_payload(&self, id: &str) -> serde_json::Value {
         let bus = crate::mailbox::Bus::default();
         match Session::load(id) {
-            Ok(s) => session_value(s, id, &bus),
+            Ok(s) => with_paused(session_value(s, id, &bus), id),
             Err(e) => serde_json::json!({"ok": false, "error": e.to_string()}),
         }
     }
@@ -108,9 +107,9 @@ impl AppState {
         if v.is_null() {
             drop(snap);
             let g = self.inner.lock().await;
-            return g.runtime.status_json(Some(&g.session));
+            return live_status(g.runtime.status_json(Some(&g.session)), false);
         }
-        overlay_busy(v, snap.busy)
+        live_status(v, snap.busy)
     }
 
     /// Delivers a message to another session over the message bus on behalf
@@ -243,6 +242,8 @@ pub async fn serve(cfg: Config, cwd: PathBuf) -> Result<()> {
             .route("/health", get(|| async { "ok" }))
             .route("/diff", get(diff_page))
             .route("/diff.html", get(diff_page))
+            .route("/assets/{name}", get(public_asset))
+            .route("/favicon.svg", get(favicon))
             .route("/GATEWAY.md", get(gateway_doc))
             .with_state(state.clone())
             .merge(protected)
@@ -385,6 +386,59 @@ async fn gateway_doc() -> &'static str {
     include_str!("../web/GATEWAY.md")
 }
 
+fn embedded_asset(name: &str) -> Option<(&'static str, &'static [u8])> {
+    Some(match name {
+        "control-room.css" => (
+            "text/css",
+            include_str!("../web/assets/control-room.css").as_bytes(),
+        ),
+        "core.mjs" => (
+            "text/javascript",
+            include_str!("../web/assets/core.mjs").as_bytes(),
+        ),
+        "control-room.mjs" => (
+            "text/javascript",
+            include_str!("../web/assets/control-room.mjs").as_bytes(),
+        ),
+        "diff.mjs" => (
+            "text/javascript",
+            include_str!("../web/assets/diff.mjs").as_bytes(),
+        ),
+        "mark.svg" => (
+            "image/svg+xml",
+            include_str!("../web/assets/mark.svg").as_bytes(),
+        ),
+        "icons.svg" => (
+            "image/svg+xml",
+            include_str!("../web/assets/icons.svg").as_bytes(),
+        ),
+        "geist-latin.woff2" => (
+            "font/woff2",
+            include_bytes!("../web/assets/geist-latin.woff2"),
+        ),
+        "GEIST-LICENSE" => (
+            "text/plain",
+            include_str!("../web/assets/GEIST-LICENSE").as_bytes(),
+        ),
+        "LUCIDE-LICENSE" => (
+            "text/plain",
+            include_str!("../web/assets/LUCIDE-LICENSE").as_bytes(),
+        ),
+        _ => return None,
+    })
+}
+
+async fn public_asset(Path(name): Path<String>) -> Response {
+    match embedded_asset(&name) {
+        Some((mime, body)) => ([(axum::http::header::CONTENT_TYPE, mime)], body).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn favicon() -> Response {
+    public_asset(Path("mark.svg".into())).await
+}
+
 async fn api_status(State(st): State<AppState>) -> impl IntoResponse {
     Json(st.status_payload().await)
 }
@@ -395,29 +449,35 @@ async fn api_models(State(st): State<AppState>) -> impl IntoResponse {
         return Json(serde_json::json!({"ok": true, "models": snap.models}));
     }
     drop(snap);
-    let g = st.inner.lock().await;
+    let Ok(g) = st.inner.try_lock() else {
+        return Json(
+            serde_json::json!({"ok": false, "error": "runtime busy; retry after the active turn"}),
+        );
+    };
     match g.runtime.list_models().await {
         Ok(m) => Json(serde_json::json!({"ok": true, "models": m})),
         Err(e) => Json(serde_json::json!({"ok": false, "error": e.to_string()})),
     }
 }
 
-async fn api_session_new(State(st): State<AppState>) -> impl IntoResponse {
-    let mut g = st.inner.lock().await;
+async fn api_session_new(State(st): State<AppState>) -> Response {
+    let Ok(mut g) = st.inner.try_lock() else {
+        return request_error(
+            StatusCode::CONFLICT,
+            "runtime busy; cannot create a session during a turn",
+        );
+    };
     let cwd = g.runtime.jail.cwd.display().to_string();
     let model = g.runtime.cfg.model.clone();
     match Session::new(&cwd, &model) {
         Ok(s) => {
             let id = s.id().to_string();
-            g.session = s;
-            let status = g.runtime.status_json(Some(&g.session));
-            drop(g);
-            let mut snap = st.snap.write().await;
-            snap.status = status;
-            snap.busy = false;
-            Json(serde_json::json!({"ok": true, "session_id": id}))
+            let Inner { runtime, session } = &mut *g;
+            install_session(session, s, || runtime.reset_session_state());
+            st.refresh_snapshot(&g, false).await;
+            Json(serde_json::json!({"ok": true, "session_id": id})).into_response()
         }
-        Err(e) => Json(serde_json::json!({"ok": false, "error": e.to_string()})),
+        Err(e) => request_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
 
@@ -474,6 +534,123 @@ fn overlay_busy(mut status: serde_json::Value, busy: bool) -> serde_json::Value 
     status
 }
 
+pub(crate) fn with_paused(mut value: serde_json::Value, id: &str) -> serde_json::Value {
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "paused".into(),
+            serde_json::json!(crate::control_bus::ControlBus::default().is_paused(id)),
+        );
+    }
+    value
+}
+
+pub(crate) fn live_status(status: serde_json::Value, busy: bool) -> serde_json::Value {
+    let id = status
+        .get("session")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    let status = overlay_busy(status, busy);
+    match id {
+        Some(id) => with_paused(status, &id),
+        None => status,
+    }
+}
+
+fn request_error(status: StatusCode, message: impl ToString) -> Response {
+    (
+        status,
+        Json(serde_json::json!({"ok": false, "error": message.to_string()})),
+    )
+        .into_response()
+}
+
+fn install_session(current: &mut Session, selected: Session, reset: impl FnOnce()) {
+    if current.id() != selected.id() {
+        reset();
+        *current = selected;
+    }
+}
+
+fn check_workspace(cwd: &FsPath, recorded: &str) -> Result<()> {
+    let active = cwd.canonicalize()?;
+    let selected = FsPath::new(recorded)
+        .canonicalize()
+        .map_err(|e| anyhow::anyhow!("session workspace unavailable: {recorded}: {e}"))?;
+    anyhow::ensure!(
+        active == selected,
+        "session workspace mismatch: session uses {recorded}; serve uses {}",
+        cwd.display()
+    );
+    Ok(())
+}
+
+fn prepare_chat(inner: &mut Inner, req: &ChatReq) -> Result<(), (StatusCode, String)> {
+    if req.message.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "message is required".into()));
+    }
+    if req.message.len() > 512 * 1024 {
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "message exceeds 512 KiB".into(),
+        ));
+    }
+    let selected = match req.session_id.as_deref() {
+        Some(id) => {
+            uuid::Uuid::parse_str(id)
+                .map_err(|_| (StatusCode::BAD_REQUEST, "invalid session id".into()))?;
+            if id != inner.session.id() {
+                let session =
+                    Session::load(id).map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+                if session.id() != id {
+                    return Err((
+                        StatusCode::CONFLICT,
+                        "session metadata id does not match requested id".into(),
+                    ));
+                }
+                check_workspace(&inner.runtime.jail.cwd, &session.meta.cwd)
+                    .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
+                Some(session)
+            } else {
+                None
+            }
+        }
+        None => None,
+    };
+    let model = req
+        .model
+        .as_deref()
+        .or_else(|| selected.as_ref().map(|s| s.meta.model.as_str()));
+    if let Some(model) = model {
+        if model.trim().is_empty() || model.len() > 512 {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "model must be non-empty and at most 512 bytes".into(),
+            ));
+        }
+        if model != inner.runtime.cfg.model {
+            let mut cfg = inner.runtime.cfg.clone();
+            cfg.model = model.into();
+            inner
+                .runtime
+                .reconfigure(cfg)
+                .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+        }
+    }
+    if let Some(selected) = selected {
+        let Inner { runtime, session } = inner;
+        install_session(session, selected, || runtime.reset_session_state());
+    }
+    Ok(())
+}
+
+fn turn_progress(runtime: &Runtime, session: &Session) -> (u32, u64, usize) {
+    (
+        runtime.goal.as_ref().map_or(0, |g| g.rounds),
+        runtime.turns,
+        session.messages.len(),
+    )
+}
+
 /// Message-bus delivery shared by `POST /api/session/{id}/messages` and
 /// [`AppState::message_session`].
 async fn message_session_send(id: &str, text: &str) -> Response {
@@ -528,23 +705,15 @@ async fn api_chat_stream(
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
     let (tx, rx) = mpsc::unbounded_channel::<AgentEvent>();
     tokio::spawn(async move {
-        {
-            let mut s = st.snap.write().await;
-            s.busy = true;
-        }
         let mut g = st.inner.lock().await;
-        if let Some(id) = &req.session_id {
-            if id != g.session.id() {
-                if let Ok(s) = Session::load(id) {
-                    g.session = s;
-                }
-            }
+        if let Err((_, text)) = prepare_chat(&mut g, &req) {
+            let _ = tx.send(AgentEvent {
+                kind: "error".into(),
+                text,
+            });
+            return;
         }
-        if let Some(model) = req.model {
-            if !model.is_empty() {
-                g.runtime.cfg.model = model;
-            }
-        }
+        st.refresh_snapshot(&g, true).await;
         let sid = g.session.id().to_string();
         let tx_ev = tx.clone();
         let ev_tx = st.events.clone();
@@ -553,6 +722,7 @@ async fn api_chat_stream(
         let mut last_err: Option<String> = None;
         loop {
             let Inner { runtime, session } = &mut *g;
+            let progress = turn_progress(runtime, session);
             let result = runtime
                 .turn(session, &next, |ev| {
                     let _ = tx_ev.send(ev.clone());
@@ -563,7 +733,7 @@ async fn api_chat_stream(
             match result {
                 Ok(reply) => {
                     last_ok = Some(reply);
-                    if !cont {
+                    if !cont || turn_progress(runtime, session) == progress {
                         break;
                     }
                     let _ = tx.send(AgentEvent {
@@ -578,16 +748,7 @@ async fn api_chat_stream(
                 }
             }
         }
-        let status = {
-            let Inner { runtime, session } = &mut *g;
-            runtime.status_json(Some(session))
-        };
-        drop(g);
-        {
-            let mut s = st.snap.write().await;
-            s.status = status;
-            s.busy = false;
-        }
+        st.refresh_snapshot(&g, false).await;
         if let Some(e) = last_err {
             let _ = tx.send(AgentEvent {
                 kind: "error".into(),
@@ -613,20 +774,12 @@ async fn api_chat_stream(
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
-async fn api_chat(State(st): State<AppState>, Json(req): Json<ChatReq>) -> impl IntoResponse {
+async fn api_chat(State(st): State<AppState>, Json(req): Json<ChatReq>) -> Response {
     let mut g = st.inner.lock().await;
-    if let Some(id) = &req.session_id {
-        if id != g.session.id() {
-            if let Ok(s) = Session::load(id) {
-                g.session = s;
-            }
-        }
+    if let Err((status, message)) = prepare_chat(&mut g, &req) {
+        return request_error(status, message);
     }
-    if let Some(model) = req.model {
-        if !model.is_empty() {
-            g.runtime.cfg.model = model;
-        }
-    }
+    st.refresh_snapshot(&g, true).await;
     let mut events = Vec::new();
     let Inner { runtime, session } = &mut *g;
     let sid = session.id().to_string();
@@ -637,18 +790,24 @@ async fn api_chat(State(st): State<AppState>, Json(req): Json<ChatReq>) -> impl 
             broadcast_event(&tx, &sid, &ev);
         })
         .await;
+    st.refresh_snapshot(&g, false).await;
     match result {
         Ok(reply) => Json(serde_json::json!({
             "ok": true,
-            "session_id": session.id(),
+            "session_id": sid,
             "reply": reply,
             "events": events,
-        })),
-        Err(e) => Json(serde_json::json!({
-            "ok": false,
-            "error": e.to_string(),
-            "events": events,
-        })),
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({
+                "ok": false,
+                "error": e.to_string(),
+                "events": events,
+            })),
+        )
+            .into_response(),
     }
 }
 
@@ -672,28 +831,37 @@ async fn v1_chat_completions(
             "messages must contain at least one non-system message".into(),
         );
     };
-    {
-        let mut s = st.snap.write().await;
-        s.busy = true;
-    }
     let mut g = st.inner.lock().await;
+    let chat = ChatReq {
+        message: prompt.clone(),
+        session_id: None,
+        model: req.model.clone(),
+    };
+    if let Err((status, message)) = prepare_chat(&mut g, &chat) {
+        return completion_error(status, message);
+    }
     let cwd = g.runtime.jail.cwd.display().to_string();
     let model = g.runtime.cfg.model.clone();
     let result = match Session::new(&cwd, &model) {
         Ok(mut session) => {
+            g.runtime.reset_session_state();
+            {
+                let mut snap = st.snap.write().await;
+                snap.status = g.runtime.status_json(Some(&session));
+                snap.busy = true;
+            }
             let sid = session.id().to_string();
             let tx = st.events.clone();
-            g.runtime
+            let result = g
+                .runtime
                 .turn(&mut session, &prompt, |ev| broadcast_event(&tx, &sid, &ev))
-                .await
+                .await;
+            g.runtime.reset_session_state();
+            result
         }
         Err(e) => Err(e),
     };
-    drop(g);
-    {
-        let mut s = st.snap.write().await;
-        s.busy = false;
-    }
+    st.refresh_snapshot(&g, false).await;
     match result {
         Ok(reply) => Json(serde_json::json!({
             "id": format!("chatcmpl-{}", uuid::Uuid::new_v4()),
@@ -716,6 +884,112 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use tower::ServiceExt;
+
+    #[test]
+    fn session_installation_resets_only_for_new_or_switched_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().display().to_string();
+        let mut current =
+            Session::create_at("first".into(), dir.path().join("first.jsonl"), &cwd, "mock")
+                .unwrap();
+        let mut resets = 0;
+        install_session(
+            &mut current,
+            Session::create_at("new".into(), dir.path().join("new.jsonl"), &cwd, "mock").unwrap(),
+            || resets += 1,
+        );
+        assert_eq!(current.id(), "new");
+        assert_eq!(resets, 1);
+        let same = current.clone();
+        install_session(&mut current, same, || resets += 1);
+        assert_eq!(resets, 1);
+        let switched =
+            Session::create_at("saved".into(), dir.path().join("saved.jsonl"), &cwd, "mock")
+                .unwrap();
+        install_session(&mut current, switched, || resets += 1);
+        assert_eq!(current.id(), "saved");
+        assert_eq!(resets, 2);
+    }
+
+    #[test]
+    fn workspace_check_accepts_alias_and_rejects_other_or_missing_workspace() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        assert!(
+            check_workspace(first.path(), &first.path().join(".").display().to_string()).is_ok()
+        );
+        let err = check_workspace(first.path(), &second.path().display().to_string()).unwrap_err();
+        assert!(err.to_string().contains("workspace mismatch"));
+        assert!(check_workspace(
+            first.path(),
+            &first.path().join("missing").display().to_string()
+        )
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn asset_routes_embed_exact_whitelist_with_mime_and_reject_unknown() {
+        let app = Router::new()
+            .route("/assets/{name}", get(public_asset))
+            .route("/favicon.svg", get(favicon));
+        for (name, mime) in [
+            ("control-room.css", "text/css"),
+            ("core.mjs", "text/javascript"),
+            ("control-room.mjs", "text/javascript"),
+            ("diff.mjs", "text/javascript"),
+            ("mark.svg", "image/svg+xml"),
+            ("icons.svg", "image/svg+xml"),
+            ("geist-latin.woff2", "font/woff2"),
+            ("GEIST-LICENSE", "text/plain"),
+            ("LUCIDE-LICENSE", "text/plain"),
+        ] {
+            let res = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/assets/{name}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::OK, "{name}");
+            assert_eq!(res.headers()[axum::http::header::CONTENT_TYPE], mime);
+            let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            assert_eq!(bytes.as_ref(), embedded_asset(name).unwrap().1);
+            assert!(!bytes.is_empty(), "{name}");
+        }
+        for name in ["unknown.css", "README.md", "..", "mark.svg.bak"] {
+            assert!(embedded_asset(name).is_none());
+            let res = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/assets/{name}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        }
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/favicon.svg")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers()[axum::http::header::CONTENT_TYPE],
+            "image/svg+xml"
+        );
+    }
 
     #[test]
     fn token_compare_is_exact_and_length_sensitive() {

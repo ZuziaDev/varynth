@@ -22,6 +22,15 @@ include = [
     "/web/diff.html",
     "/web/GATEWAY.md",
     "/web/index.html",
+    "/web/assets/control-room.css",
+    "/web/assets/control-room.mjs",
+    "/web/assets/core.mjs",
+    "/web/assets/diff.mjs",
+    "/web/assets/mark.svg",
+    "/web/assets/icons.svg",
+    "/web/assets/geist-latin.woff2",
+    "/web/assets/GEIST-LICENSE",
+    "/web/assets/LUCIDE-LICENSE",
 ]
 
 [package.metadata.docs.rs]

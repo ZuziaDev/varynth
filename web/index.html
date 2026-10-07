@@ -1,175 +1,86 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Varynth Control Room</title>
-<style>
-:root {
-  --bg: #090a12;
-  --bg-2: #0e1020;
-  --panel: #121528;
-  --panel-2: #171a31;
-  --line: #292b4b;
-  --line-soft: #20233d;
-  --ink: #eeeaff;
-  --muted: #aaa7c3;
-  --quiet: #9793b2;
-  --violet: #9b7bff;
-  --lavender: #d6c8ff;
-  --mint: #8fe0bf;
-  --amber: #f4c96b;
-  --red: #ff7887;
-  --cyan: #8bd7ee;
-  --shadow: 0 20px 60px rgba(0,0,0,.28);
-}
-* { box-sizing: border-box; }
-html, body { min-height: 100%; margin: 0; background: var(--bg); color: var(--ink); }
-body { font-family: "Segoe UI", system-ui, sans-serif; font-size: 14px; letter-spacing: .01em; }
-button, input, textarea, select { font: inherit; }
-button { cursor: pointer; }
-button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, a:focus-visible { outline: 2px solid var(--lavender); outline-offset: 2px; }
-.app { min-height: 100vh; display: grid; grid-template-columns: 270px minmax(0,1fr) 330px; grid-template-rows: 74px minmax(0,1fr) 116px; grid-template-areas: "rail header header" "rail main inspector" "rail composer inspector"; }
-.header { grid-area: header; border-bottom: 1px solid var(--line); background: rgba(14,16,32,.94); display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 0 26px; position: relative; z-index: 2; }
-.brand { display:flex; align-items:center; gap: 12px; min-width: 0; }
-.logo { width: 34px; height: 34px; display:block; }
-.brand-name { font-size: 18px; font-weight: 730; letter-spacing: .14em; }
-.brand-sub { color: var(--quiet); font-size: 12px; margin-top: 2px; }
-.header-status { display:flex; align-items:center; gap: 10px; min-width: 0; }
-.status-chip, .mode-chip { display:inline-flex; align-items:center; gap:7px; border: 1px solid var(--line); padding: 7px 10px; color: var(--muted); white-space: nowrap; }
-.status-chip.live { color: var(--mint); border-color: rgba(143,224,191,.45); }
-.status-chip.busy { color: var(--lavender); border-color: rgba(155,123,255,.55); }
-.status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 14px currentColor; }
-.header-actions { display:flex; gap: 8px; }
-.icon-btn, .quiet-btn { border: 1px solid var(--line); color: var(--muted); background: transparent; padding: 8px 11px; }
-.icon-btn:hover, .quiet-btn:hover { border-color: var(--violet); color: var(--ink); }
-.rail { grid-area: rail; border-right: 1px solid var(--line); background: var(--bg-2); padding: 20px 14px; min-height: 0; overflow: auto; }
-.rail-head { display:flex; justify-content:space-between; align-items: center; margin: 0 7px 16px; }
-.rail-label, .section-label { color: var(--quiet); font-size: 11px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
-.new-session { background: var(--violet); border: 0; color: #100d20; padding: 8px 11px; font-weight: 700; }
-.new-session:hover { background: var(--lavender); }
-.session-list { display:grid; gap: 4px; }
-.session { border-left: 2px solid transparent; padding: 12px 10px; cursor:pointer; background: transparent; }
-.session:hover { background: rgba(155,123,255,.08); }
-.session.active { border-left-color: var(--violet); background: rgba(155,123,255,.12); }
-.session-title { color: var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight: 650; }
-.session-meta { color: var(--quiet); font: 11px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; margin-top: 5px; display:flex; justify-content:space-between; gap:8px; }
-.unread { color: var(--lavender); }
-.rail-foot { border-top:1px solid var(--line-soft); padding: 16px 7px 0; margin-top: 18px; color: var(--quiet); font-size: 12px; line-height:1.55; }
-.main { grid-area: main; min-width:0; min-height:0; overflow:auto; background: radial-gradient(circle at 72% 0%, rgba(155,123,255,.09), transparent 34%), var(--bg); }
-.main-top { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; padding: 28px 32px 14px; border-bottom:1px solid var(--line-soft); }
-.main-title { margin:0; font-size: 24px; letter-spacing:-.02em; }
-.main-kicker { color: var(--quiet); font-size:12px; margin-top:6px; }
-.goal { border:1px solid rgba(155,123,255,.45); background:rgba(155,123,255,.08); padding:10px 12px; max-width: 330px; color:var(--lavender); font-size:12px; line-height:1.4; }
-.goal strong { display:block; font-size:11px; letter-spacing:.12em; text-transform:uppercase; margin-bottom:4px; }
-.log { padding: 26px 32px 40px; max-width: 920px; }
-.empty { min-height: 230px; border:1px dashed var(--line); display:grid; place-items:center; color:var(--quiet); text-align:center; padding:26px; }
-.message { margin-bottom:24px; max-width: 78ch; }
-.message-head { display:flex; align-items:center; gap:8px; color:var(--quiet); font: 11px ui-monospace, SFMono-Regular, Consolas, monospace; margin-bottom:7px; }
-.message-head .role { color:var(--lavender); }
-.message.user .role { color:var(--cyan); }
-.message.tool .role { color:var(--amber); }
-.message.error .role { color:var(--red); }
-.message pre { font: 14px/1.62 "Segoe UI", system-ui, sans-serif; white-space:pre-wrap; word-break:break-word; margin:0; color:var(--ink); }
-.message.assistant pre { color:#f4f0ff; }
-.inspector { grid-area: inspector; border-left:1px solid var(--line); background:var(--bg-2); min-height:0; overflow:auto; padding: 18px 16px; }
-.inspector-top { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; margin-bottom:18px; }
-.inspector-title { margin:0; font-size:13px; letter-spacing:.08em; text-transform:uppercase; }
-.live-caption { color:var(--quiet); font-size:11px; margin-top:4px; }
-.inspect-block { border-top:1px solid var(--line-soft); padding:16px 0; }
-.inspect-block:first-of-type { border-top:0; padding-top:0; }
-.inspect-block h2 { font-size:11px; text-transform:uppercase; letter-spacing:.14em; color:var(--quiet); margin:0 0 10px; }
-.data-list { display:grid; gap:7px; margin:0; }
-.data-row { display:flex; justify-content:space-between; gap:12px; color:var(--muted); font-size:12px; }
-.data-row b { color:var(--ink); font-weight:600; text-align:right; max-width: 62%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.data-row b.good { color:var(--mint); }
-.data-row b.warn { color:var(--amber); }
-.data-row b.bad { color:var(--red); }
-.progress { height: 6px; background: var(--line-soft); margin-top: 9px; overflow:hidden; }
-.progress > i { display:block; height:100%; width:0; background: linear-gradient(90deg,var(--violet),var(--lavender)); transition:width .25s ease; }
-.gateway-state { display:flex; align-items:center; justify-content:space-between; gap:10px; }
-.gateway-controls { display:grid; grid-template-columns: 1fr auto; gap:7px; margin-top:9px; }
-.gateway-controls input { width:100%; min-width:0; background:var(--bg); border:1px solid var(--line); color:var(--ink); padding:8px 9px; }
-.gateway-controls button, .gateway-actions button { border:1px solid var(--line); background:transparent; color:var(--muted); padding:8px 9px; }
-.gateway-controls button:hover, .gateway-actions button:hover { color:var(--ink); border-color:var(--violet); }
-.gateway-actions { display:flex; flex-wrap:wrap; gap:6px; margin-top:7px; }
-.event-feed { max-height: 230px; overflow:auto; display:grid; gap:5px; margin-top:10px; }
-.event { display:grid; grid-template-columns:auto 1fr; gap:8px; font:11px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; color:var(--muted); }
-.event-tag { color:var(--lavender); }
-.event-tag.tool { color:var(--amber); }
-.event-tag.error { color:var(--red); }
-.event-tag.approval_request { color:var(--violet); }
-.approval-list { display:grid; gap:8px; }
-.approval { border:1px solid rgba(155,123,255,.55); padding:10px; background:rgba(155,123,255,.08); }
-.approval-copy { font-size:12px; color:var(--ink); word-break:break-word; }
-.approval-id { color:var(--muted); font:10px ui-monospace,monospace; margin-top:5px; word-break:break-all; }
-.approval-actions { display:flex; gap:6px; margin-top:9px; }
-.approval-actions button { flex:1; border:1px solid var(--line); background:transparent; color:var(--muted); padding:6px; }
-.approval-actions button:hover { border-color:var(--mint); color:var(--mint); }
-.approval-actions .deny:hover { border-color:var(--red); color:var(--red); }
-.composer { grid-area: composer; border-top:1px solid var(--line); background:var(--panel); padding:15px 24px; display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px; align-items:end; }
-.composer textarea { min-height:64px; max-height:160px; resize:vertical; background:var(--bg); color:var(--ink); border:1px solid var(--line); padding:12px; line-height:1.45; }
-.composer textarea:focus { border-color:var(--violet); outline:none; box-shadow:0 0 0 2px rgba(155,123,255,.14); }
-.send { height:64px; min-width:100px; background:var(--violet); color:#100d20; border:0; font-weight:800; }
-.send:hover { background:var(--lavender); }
-.send:disabled { opacity:.45; cursor:wait; }
-.toast { position:fixed; right:22px; bottom:22px; background:var(--panel-2); border:1px solid var(--line); box-shadow:var(--shadow); padding:12px 14px; color:var(--ink); display:none; z-index:20; }
-.toast.show { display:block; }
-@media (max-width: 1100px) { .app { grid-template-columns:220px minmax(0,1fr); grid-template-areas:"rail header" "rail main" "rail composer"; } .inspector { position:fixed; right:0; top:74px; bottom:0; width:min(340px,92vw); transform:translateX(100%); transition:transform .2s ease; z-index:10; box-shadow:var(--shadow); } .inspector.open { transform:translateX(0); } }
-@media (max-width: 760px) { .app { display:flex; flex-direction:column; min-height:100vh; } .rail { border-right:0; border-bottom:1px solid var(--line); max-height:190px; } .header { min-height:72px; padding:14px 16px; align-items:flex-start; } .header-status { flex-wrap:wrap; justify-content:flex-end; } .header-actions { display:none; } .main-top { padding:20px 18px 12px; } .log { padding:20px 18px 32px; } .composer { padding:12px 14px; } .send { min-width:76px; } }
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition:none !important; scroll-behavior:auto !important; } }
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Varynth local coding workspace with a TUI, secure tools, MCP, goals and an operator dashboard">
+  <title>Varynth Control Room</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="/assets/geist-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/assets/control-room.css">
+  <script type="module" src="/assets/control-room.mjs"></script>
 </head>
 <body>
-<div class="app">
-  <aside class="rail">
-    <div class="rail-head"><span class="rail-label">sessions</span><button class="new-session" id="new-session" type="button">new</button></div>
-    <div class="session-list" id="sessions"></div>
-    <div class="rail-foot">Local session workspace<br><span id="rail-note">events stay on this machine</span></div>
-  </aside>
-  <header class="header">
-    <div class="brand">
-      <svg class="logo" viewBox="0 0 34 34" aria-hidden="true"><path d="M4 29 17 4l13 25M9 20h16" fill="none" stroke="var(--violet)" stroke-width="2.4"/><circle cx="17" cy="20" r="3" fill="var(--lavender)"/></svg>
-      <div><div class="brand-name">VARYNTH</div><div class="brand-sub">local agent control room</div></div>
-    </div>
-    <div class="header-status">
-      <span class="status-chip" id="status-chip"><i class="status-dot"></i><span id="status-label">connecting</span></span>
-      <span class="mode-chip" id="mode-chip">proxy · workspace-write</span>
-      <div class="header-actions"><button class="icon-btn" id="inspector-toggle" type="button">inspector</button><a class="quiet-btn" href="/diff">diff</a></div>
-    </div>
-  </header>
-  <main class="main">
-    <div class="main-top"><div><h1 class="main-title" id="session-title">Session</h1><div class="main-kicker" id="session-kicker">No active turn</div></div><div class="goal" id="goal-box" hidden><strong>Goal</strong><span id="goal-text"></span></div></div>
-    <div class="log" id="log"><div class="empty" id="empty">Send a task to start a local coding turn.</div></div>
-  </main>
-  <aside class="inspector" id="inspector">
-    <div class="inspector-top"><div><h2 class="inspector-title">runtime</h2><div class="live-caption">live operator view</div></div><button class="quiet-btn" id="inspector-close" type="button">close</button></div>
-    <section class="inspect-block"><h2>runtime state</h2><div class="data-list" id="runtime-data"></div><div class="progress"><i id="token-bar"></i></div></section>
-    <section class="inspect-block"><h2>gateway</h2><div class="gateway-state"><span class="status-chip" id="gateway-state"><i class="status-dot"></i><span id="gateway-label">offline</span></span><button class="quiet-btn" id="gateway-connect" type="button">connect</button></div><div class="gateway-controls"><input id="gateway-token" type="password" placeholder="dashboard token" autocomplete="off"><button id="gateway-ping" type="button">ping</button></div><div class="gateway-actions"><button id="gateway-sessions" type="button">sessions</button><button id="gateway-status" type="button">status</button></div></section>
-    <section class="inspect-block"><h2>approvals</h2><div class="approval-list" id="approvals"><span class="live-caption">No pending approval.</span></div></section>
-    <section class="inspect-block"><h2>event stream</h2><div class="event-feed" id="events"></div></section>
-  </aside>
-  <form class="composer" id="form"><textarea id="input" placeholder="Describe the next engineering task…"></textarea><button class="send" id="send" type="submit">run turn</button></form>
-</div>
-<div class="toast" id="toast"></div>
-<script>
-const $ = (id) => document.getElementById(id);
-const log = $('log'), sessions = $('sessions'), events = $('events'), approvals = $('approvals'), toast = $('toast');
-let sessionId = null, socket = null, requestId = 0, pending = new Map();
-function esc(value) { return String(value ?? ''); }
-function showToast(text) { toast.textContent = text; toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 2400); }
-function addMessage(role, text) { $('empty')?.remove(); const item = document.createElement('article'); item.className = 'message ' + role; const head = document.createElement('div'); head.className = 'message-head'; const badge = document.createElement('span'); badge.className = 'role'; badge.textContent = role; head.appendChild(badge); const body = document.createElement('pre'); body.textContent = text; item.append(head, body); log.appendChild(item); log.scrollTop = log.scrollHeight; }
-function addEvent(kind, text) { const row = document.createElement('div'); row.className = 'event'; const tag = document.createElement('span'); tag.className = 'event-tag ' + kind; tag.textContent = kind; const body = document.createElement('span'); body.textContent = text; row.append(tag, body); events.appendChild(row); while (events.children.length > 80) events.firstChild.remove(); events.scrollTop = events.scrollHeight; }
-function renderRuntime(st) { const usage = st.usage || {}; $('mode-chip').textContent = `${st.provider || 'provider'} · ${st.sandbox || 'sandbox'}`; $('session-title').textContent = st.session ? `Session ${String(st.session).slice(0, 8)}` : 'Session'; $('session-kicker').textContent = st.busy ? 'turn running · streaming events' : `${st.model || 'model'} · ${st.permission || 'permission ready'}`; $('status-label').textContent = st.busy ? 'running' : 'ready'; $('status-chip').className = 'status-chip ' + (st.busy ? 'busy' : 'live'); const goal = st.goal; $('goal-box').hidden = !goal; if (goal) $('goal-text').textContent = `${goal.status} · ${goal.rounds}/${goal.max_rounds} · ${goal.condition}`; $('runtime-data').innerHTML = ''; [['provider', st.provider], ['model', st.model], ['effort', st.effort], ['sandbox', st.sandbox], ['permission', st.permission], ['turns', st.turns ?? 0], ['tokens', `${usage.input_tokens || 0} in / ${usage.output_tokens || 0} out`]].forEach(([k,v]) => { const row=document.createElement('div'); row.className='data-row'; const a=document.createElement('span'); a.textContent=k; const b=document.createElement('b'); b.textContent=esc(v); row.append(a,b); $('runtime-data').appendChild(row); }); const estimate=usage.context_estimate_tokens || 0; $('token-bar').style.width = `${Math.min(100, estimate / 96000 * 100)}%`; }
-function renderSessions(data) { sessions.innerHTML=''; (data.sessions || []).forEach(s => { const item=document.createElement('div'); item.className='session' + (s.id === sessionId ? ' active' : ''); item.dataset.id=s.id; const title=document.createElement('div'); title.className='session-title'; title.textContent=s.title || s.id; const meta=document.createElement('div'); meta.className='session-meta'; const model=document.createElement('span'); model.textContent=s.model || 'model'; const unread=document.createElement('span'); unread.className='unread'; unread.textContent=s.unread ? `${s.unread} unread` : ''; meta.append(model, unread); item.append(title,meta); item.onclick=()=>loadSession(s.id); sessions.appendChild(item); }); }
-async function loadSession(id) { const data=await (await fetch('/api/session/'+encodeURIComponent(id))).json(); if (!data.ok) return showToast(data.error || 'session unavailable'); sessionId=id; log.innerHTML=''; (data.messages || []).forEach(m=>addMessage(m.role, m.content)); await refresh(); }
-async function refresh() { try { const [st,ss]=await Promise.all([fetch('/api/status').then(r=>r.json()), fetch('/api/sessions').then(r=>r.json())]); renderRuntime(st); sessionId=st.session || sessionId; if (ss.ok) renderSessions(ss); } catch (e) { $('status-label').textContent='offline'; $('status-chip').className='status-chip'; } }
-function gatewaySend(method, params={}) { if (!socket || socket.readyState !== 1) return showToast('Gateway is offline'); const id=String(++requestId); pending.set(id,(value)=>addEvent('response',JSON.stringify(value).slice(0,180))); socket.send(JSON.stringify({jsonrpc:'2.0',id,method,params})); }
-function gatewayConnect() { if(socket) { socket.close(); socket=null; $('gateway-label').textContent='offline'; return; } const token=$('gateway-token').value.trim(); const proto=location.protocol==='https:'?'wss://':'ws://'; socket=new WebSocket(proto+location.host+'/ws/gateway'+(token?'?token='+encodeURIComponent(token):'')); $('gateway-label').textContent='connecting'; socket.onopen=()=>{ $('gateway-label').textContent='live'; showToast('Gateway connected'); }; socket.onclose=()=>{ socket=null; $('gateway-label').textContent='offline'; }; socket.onerror=()=>{ $('gateway-label').textContent='error'; }; socket.onmessage=(event)=>{ let msg; try { msg=JSON.parse(event.data); } catch { return; } if(msg.method==='event') { const p=msg.params||{}; const ev=p.event||{}; addEvent(ev.kind||'event',ev.text||''); if(ev.kind==='approval_request') renderApproval(ev); return; } const cb=pending.get(String(msg.id)); if(cb){ pending.delete(String(msg.id)); cb(msg.result ?? msg.error); } }; }
-function renderApproval(ev) { if(approvals.querySelector(`[data-id="${ev.id || ''}"]`)) return; const card=document.createElement('div'); card.className='approval'; card.dataset.id=ev.id || ''; const copy=document.createElement('div'); copy.className='approval-copy'; copy.textContent=ev.detail || ev.text || 'Approval requested'; const id=document.createElement('div'); id.className='approval-id'; id.textContent=ev.id || 'relay id unavailable'; const actions=document.createElement('div'); actions.className='approval-actions'; ['once','always','deny'].forEach(decision=>{ const b=document.createElement('button'); b.textContent=decision; b.className=decision==='deny'?'deny':''; b.onclick=()=>{ gatewaySend('approval.respond',{id:ev.id,decision}); card.remove(); }; actions.appendChild(b); }); card.append(copy,id,actions); if(approvals.querySelector('.live-caption')) approvals.innerHTML=''; approvals.appendChild(card); }
-$('form').onsubmit=async (event)=>{ event.preventDefault(); const input=$('input'); const text=input.value.trim(); if(!text) return; addMessage('user',text); input.value=''; $('send').disabled=true; try { const response=await fetch('/api/chat/stream',{method:'POST',headers:{'content-type':'application/json','accept':'text/event-stream'},body:JSON.stringify({message:text,session_id:sessionId})}); const reader=response.body?.getReader(); if(!reader) throw new Error('stream unavailable'); const decoder=new TextDecoder(); let buffer=''; for(;;){ const {value,done}=await reader.read(); if(done) break; buffer+=decoder.decode(value,{stream:true}); const parts=buffer.split('\n\n'); buffer=parts.pop(); for(const block of parts){ const data=block.split('\n').filter(line=>line.startsWith('data:')).map(line=>line.slice(5).trim()).join(''); if(!data) continue; try { const value=JSON.parse(data); if(value.kind==='done') addMessage('assistant',value.text); else if(value.kind==='session') sessionId=value.text; else addEvent(value.kind || 'event',value.text || ''); } catch { addEvent('event',data); } } } } catch(e){ addMessage('error',String(e)); } finally { $('send').disabled=false; refresh(); } };
-$('new-session').onclick=async()=>{ const data=await (await fetch('/api/session/new',{method:'POST'})).json(); if(data.ok){ sessionId=data.session_id; log.innerHTML=''; addMessage('system','New session ready'); refresh(); } };
-$('inspector-toggle').onclick=()=>$('inspector').classList.toggle('open'); $('inspector-close').onclick=()=>$('inspector').classList.remove('open'); $('gateway-connect').onclick=gatewayConnect; $('gateway-ping').onclick=()=>gatewaySend('ping'); $('gateway-sessions').onclick=()=>gatewaySend('sessions.list'); $('gateway-status').onclick=()=>gatewaySend('status.get'); refresh();
-</script>
+  <a class="skip-link" href="#workspace">Skip to workspace</a>
+  <div class="shell">
+    <header class="app-header">
+      <a class="brand" href="/" aria-label="Varynth Control Room">
+        <img src="/assets/mark.svg" alt="" width="30" height="30">
+        <span>Varynth</span><span class="brand-surface">Control Room</span>
+      </a>
+      <div class="header-workspace"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#terminal"></use></svg><span id="workspace-path">Workspace</span></div>
+      <div class="header-actions">
+        <button class="icon-button mobile-sessions" id="sessions-toggle" type="button" aria-label="Open sessions" aria-controls="session-rail" aria-expanded="false" title="Sessions"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#panel-left"></use></svg></button>
+        <button class="connection-button" id="connection-open" type="button" title="Connection settings"><span class="status-dot" id="connection-dot"></span><span id="connection-status">Connecting</span><svg class="icon small" aria-hidden="true"><use href="/assets/icons.svg#chevron-down"></use></svg></button>
+        <button class="icon-button" id="inspector-toggle" type="button" aria-label="Toggle inspector" aria-controls="inspector" aria-expanded="true" title="Inspector"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#panel-right"></use></svg></button>
+      </div>
+    </header>
+
+    <aside class="session-rail" id="session-rail" aria-label="Sessions">
+      <div class="rail-heading"><h2>Sessions</h2><button class="icon-button drawer-close" id="sessions-close" aria-label="Close sessions" type="button"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#x"></use></svg></button></div>
+      <button class="button new-session" id="new-session" type="button"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#plus"></use></svg>New session</button>
+      <label class="search-box"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#search"></use></svg><input id="session-search" type="search" aria-label="Search sessions" placeholder="Search sessions" autocomplete="off"></label>
+      <div class="session-list" id="sessions" aria-label="Saved sessions"><div class="quiet-empty">Loading sessions…</div></div>
+      <footer class="rail-footer"><span class="status-dot good"></span><span>Local workspace</span><a class="icon-button" href="/diff" aria-label="Open diff viewer" title="Diff viewer"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#file-diff"></use></svg></a></footer>
+    </aside>
+
+    <main class="workspace" id="workspace" tabindex="-1">
+      <div class="workspace-heading">
+        <div class="session-identity"><h1 id="session-title">New session</h1><span id="session-subtitle">Loading workspace</span></div>
+        <div class="workspace-controls"><span class="runtime-state" id="runtime-state">Idle</span><button class="icon-button" id="pause-session" type="button" aria-label="Pause session" title="Pause at the next model boundary" disabled><svg class="icon" aria-hidden="true"><use id="pause-icon" href="/assets/icons.svg#pause"></use></svg></button><button class="icon-button" id="context-open" type="button" aria-label="Edit session context" title="Edit context" disabled><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#braces"></use></svg></button><a class="icon-button" href="/diff" aria-label="View diff" title="Diff viewer"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#file-diff"></use></svg></a></div>
+      </div>
+      <div class="workspace-tabs" role="tablist" aria-label="Session views">
+        <button id="tab-conversation" class="tab active" role="tab" aria-selected="true" aria-controls="conversation-panel" tabindex="0" type="button"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#message-square"></use></svg>Conversation</button>
+        <button id="tab-activity" class="tab" role="tab" aria-selected="false" aria-controls="activity-panel" tabindex="-1" type="button"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#activity"></use></svg>Activity<span id="activity-count" class="count">0</span></button>
+        <button id="tab-approvals" class="tab" role="tab" aria-selected="false" aria-controls="approvals-panel" tabindex="-1" type="button"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#shield-check"></use></svg>Approvals<span id="approval-count" class="count">0</span></button>
+      </div>
+      <div class="inline-error" id="page-error" role="alert" hidden></div>
+      <section class="conversation-panel content-panel" id="conversation-panel" role="tabpanel" aria-labelledby="tab-conversation">
+        <div class="conversation" id="log" aria-label="Conversation">
+          <div class="conversation-empty"><img src="/assets/mark.svg" alt="" width="44" height="44"><h2>New session</h2><p>No messages yet.</p></div>
+        </div>
+      </section>
+      <section class="content-panel activity-panel" id="activity-panel" role="tabpanel" aria-labelledby="tab-activity" hidden>
+        <div class="panel-toolbar"><h2>Live activity</h2><label class="compact-select">Show<select id="event-filter" aria-label="Filter activity"><option value="all">All events</option><option value="tools">Tools</option><option value="system">System</option><option value="errors">Errors</option></select></label><button class="icon-button" id="clear-events" type="button" aria-label="Clear activity view" title="Clear view"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#x"></use></svg></button></div>
+        <div class="event-feed" id="events" aria-label="Live events"><div class="quiet-empty">No events yet.</div></div>
+      </section>
+      <section class="content-panel approvals-panel" id="approvals-panel" role="tabpanel" aria-labelledby="tab-approvals" hidden>
+        <div class="panel-toolbar"><h2>Pending approvals</h2><span class="muted" id="approval-summary">No pending requests</span></div>
+        <div id="approvals" class="approval-list"><div class="quiet-empty">No pending requests.</div></div>
+      </section>
+      <form class="composer" id="form">
+        <div class="composer-field"><label class="sr-only" for="input">Message</label><textarea id="input" rows="3" placeholder="What are we working on?" spellcheck="false"></textarea></div>
+        <div class="composer-toolbar"><label class="composer-model"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#layers"></use></svg><span class="sr-only">Model</span><select id="model" aria-label="Model"><option value="">Loading models…</option></select></label><span class="composer-status" id="composer-status">Ready</span><button class="button primary send" id="send" type="submit" disabled><span>Send</span><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#arrow-up"></use></svg></button></div>
+      </form>
+    </main>
+
+    <aside class="inspector" id="inspector" aria-label="Runtime inspector">
+      <div class="inspector-heading"><h2>Inspector</h2><button class="icon-button" id="inspector-close" type="button" aria-label="Close inspector" title="Close inspector"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#x"></use></svg></button></div>
+      <section class="inspector-section"><h3>Runtime</h3><dl class="data-list" id="runtime-data"><div><dt>Provider</dt><dd>Not connected</dd></div></dl></section>
+      <section class="inspector-section"><div class="section-heading"><h3>Token usage</h3><span class="state-label" id="usage-source">Not reported</span></div><dl class="data-list usage-list"><div><dt>Input</dt><dd id="usage-input">—</dd></div><div><dt>Output</dt><dd id="usage-output">—</dd></div><div><dt>Total</dt><dd id="usage-total">—</dd></div></dl><div class="context-label"><span>Context estimate</span><span id="context-estimate">—</span></div></section>
+      <section class="inspector-section" id="goal-section" hidden><div class="section-heading"><h3>Goal</h3><span class="state-label" id="goal-status"></span></div><p class="goal-condition" id="goal-text"></p><div class="goal-meta" id="goal-meta"></div><p class="goal-verdict" id="goal-verdict" hidden></p></section>
+      <section class="inspector-section"><div class="section-heading"><h3>Skills</h3><span class="muted" id="skill-count">0</span></div><div class="skill-list" id="skills"><span class="muted">No skills loaded</span></div></section>
+      <section class="inspector-section"><div class="section-heading"><h3>Health checks</h3><button class="icon-button" id="check-health" type="button" aria-label="Run health checks" title="Run checks"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#refresh-cw"></use></svg></button></div><div class="health-list" id="doctor"><span class="muted">Not checked</span></div></section>
+      <section class="inspector-section"><div class="section-heading"><h3>Gateway</h3><span class="state-label" id="gateway-label">Offline</span></div><div class="gateway-actions"><button class="button subtle" id="gateway-connect" type="button"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#wifi"></use></svg><span>Connect</span></button><button class="icon-button" id="gateway-ping" type="button" aria-label="Ping gateway" title="Ping gateway" disabled><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#radio"></use></svg></button><button class="icon-button" id="gateway-status" type="button" aria-label="Refresh runtime status" title="Refresh status"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#refresh-cw"></use></svg></button></div><div class="gateway-latency" id="gateway-latency">—</div></section>
+      <section class="inspector-section"><div class="section-heading"><h3>Channels</h3></div><dl class="data-list" id="channels"><div><dt>Dashboard</dt><dd>Local</dd></div></dl></section>
+    </aside>
+  </div>
+  <button class="drawer-backdrop" id="drawer-backdrop" type="button" aria-label="Close side panel" hidden></button>
+  <dialog class="settings-dialog" id="connection-dialog" aria-labelledby="connection-title">
+    <form id="connection-form"><div class="dialog-heading"><h2 id="connection-title">Connection</h2><button class="icon-button" id="connection-close" type="button" aria-label="Close connection settings"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#x"></use></svg></button></div><label class="form-field">Dashboard token<input id="gateway-token" type="password" placeholder="Dashboard token" autocomplete="off" spellcheck="false"></label><p class="form-note">Kept in this page only.</p><div id="connection-error" class="inline-error" role="alert" hidden></div><div class="dialog-actions"><button class="button subtle" id="clear-token" type="button">Clear token</button><button class="button primary" type="submit">Connect</button></div></form>
+  </dialog>
+  <dialog class="context-dialog" id="context-dialog" aria-labelledby="context-title"><form id="context-form"><div class="dialog-heading"><h2 id="context-title">Session context</h2><button class="icon-button" id="context-close" type="button" aria-label="Close context editor"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#x"></use></svg></button></div><label class="form-field">Text messages<textarea id="context-input" rows="14" spellcheck="false"></textarea></label><p class="form-note">Text-only context. Applied at the next turn.</p><div class="inline-error" id="context-error" role="alert" hidden></div><div class="dialog-actions"><button class="button subtle" id="context-cancel" type="button">Cancel</button><button class="button primary" id="context-save" type="submit">Replace context</button></div></form></dialog>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 </body>
 </html>
