@@ -13,7 +13,11 @@ use varynth::session::Session;
 use varynth::{channels, dashboard, doctor, install, mcp, plugins, skills_search, tui};
 
 #[derive(Parser, Debug)]
-#[command(name = "varynth", version, about = "Varynth local coding agent")]
+#[command(
+    name = "varynth",
+    version,
+    about = "Varynth local coding workspace with a TUI, secure tools, MCP, goals and an operator dashboard"
+)]
 struct Cli {
     /// Working directory
     #[arg(short = 'C', long)]

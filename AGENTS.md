@@ -2,7 +2,9 @@
 
 ## Product
 
-Varynth is a local coding workspace for running, reviewing, and coordinating AI-assisted engineering sessions. It provides a terminal UI, a local dashboard, provider streaming, goals, MCP, skills, checkpoints, approvals, and sandboxed tools.
+Varynth local coding workspace with a TUI, secure tools, MCP, goals and an operator dashboard.
+
+The local workspace supports running, reviewing, and coordinating engineering sessions with configured models. Provider names belong in integration settings, not product analogies.
 
 The product is local-first. Sessions, memory, control journals, terminal registries, checkpoints, and credentials stay on the user's machine and are never committed.
 
@@ -12,7 +14,8 @@ The product is local-first. Sessions, memory, control journals, terminal registr
 cargo fmt --all -- --check
 cargo check --all-targets
 cargo test --no-fail-fast
-cargo build --release
+cargo build --release --locked
+node --test web/test/*.test.mjs
 npm --prefix bindings/node test
 ```
 
@@ -22,7 +25,9 @@ The verified release target is Windows. Docker, native desktop input, live provi
 
 - `src/runtime.rs`: provider loop, goals, approvals, usage, compaction, reconfiguration.
 - `src/session.rs`: JSONL sessions, titles, forks, clearing, compaction records.
-- `src/dashboard.rs`: local REST/SSE dashboard and embedded web surface.
+- `src/dashboard.rs`: local REST/SSE routes and explicit embedded asset whitelist.
+- `web/index.html`, `web/assets/control-room.css`, `web/assets/control-room.mjs`: accessible Control Room layout, styles and interactions.
+- `web/assets/core.mjs`, `web/assets/diff.mjs`: testable stream, approval, context and unified-diff parsing.
 - `src/gateway.rs`: authenticated WebSocket JSON-RPC control gateway.
 - `src/control_bus.rs`: bounded local cross-process event/context/pause bridge.
 - `src/mailbox.rs`: lock-protected session-to-session message bus.
@@ -46,7 +51,13 @@ The verified release target is Windows. Docker, native desktop input, live provi
 
 ## UI Contract
 
-The dashboard is an operator console, not a marketing page. Keep the interface dense, calm, keyboard-friendly, and readable at desktop and narrow widths. Use the purple Control Room palette: near-black blue background, violet primary accent, lavender selection, mint success, amber warning, red error.
+The dashboard is an operator console, not a marketing page. Use the recorded `DESIGN.md` tokens: graphite neutral surfaces, restrained violet selection and primary actions, mint success, amber waiting and red errors. Typography and component dimensions are fixed-size with responsive layout, not viewport-scaled text.
+
+Preserve session selection, model control, streaming responses, skills, health checks, live activity, remote approvals and diff review. The active server session and the selected historical transcript are separate identities. Mutations must wait for the server's acknowledged result; id-less approval notices are never actionable. All REST/SSE requests use the same Bearer authentication as the WebSocket gateway. Tokens live in page memory only.
+
+Keep every web dependency self-hosted and include each asset in both the server whitelist and the Cargo package allowlist. During GUI tests use a copied executable, temporary `VARYNTH_HOME` and workspace, and a local mock provider. Do not lock the executable that package/build commands need to replace.
+
+`VARYNTH.md` and `docs/` are intentionally excluded from GitHub while kept locally. Do not re-add them. This removes them from the current tree, not historic commits.
 
 Live events must remain legible and bounded. Approval actions must show the tool, detail, relay id, and one-shot/always/deny result. Session changes, pause/resume, context replacement, and model changes must surface an explicit status message.
 

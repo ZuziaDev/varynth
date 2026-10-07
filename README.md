@@ -1,6 +1,8 @@
 # Varynth
 
-Varynth is a local coding agent in one Rust binary. It talks to a model you configure, keeps sessions on disk, and can read and edit files inside the working directory you give it.
+Varynth local coding workspace with a TUI, secure tools, MCP, goals and an operator dashboard.
+
+Varynth runs as a single Rust binary. It uses the model you configure, stores sessions locally, and reads or edits files through the workspace policy.
 
 The default screen is a full-screen terminal UI. A plain line prompt, one-shot `exec`, a local dashboard, and scheduled tasks are the same agent.
 
@@ -217,7 +219,7 @@ Every `write_file` and `edit_file` first checkpoints the file's previous content
 varynth serve
 ```
 
-Open `http://127.0.0.1:7420`. The deck lists sessions, lets you pick a model, and streams a chat against this machine. Requests with a foreign `Host` header are rejected, and the API is same-origin only. If you bind a non-loopback host, set `VARYNTH_DASHBOARD_TOKEN`. `/api/*` then requires `Authorization: Bearer <token>` (compared in constant time).
+Open `http://127.0.0.1:7420`. Control Room has a searchable session rail, live conversation streaming, activity and approval tabs, model selection, skills, health checks and a runtime inspector. On narrow screens the session rail and inspector open as dismissible side panels. The Connection dialog keeps its dashboard token only in page memory and applies it to HTTP, SSE and WebSocket requests. Requests with a foreign `Host` or `Origin` are rejected. For a non-loopback bind, set `VARYNTH_DASHBOARD_TOKEN`.
 
 Telegram needs its own bot token from BotFather, not a token shared with another app. Put it in `~/.varynth/telegram.env` as `TELEGRAM_BOT_TOKEN=...`, or set `VARYNTH_TELEGRAM_BOT_TOKEN`, then run `varynth serve`. The first direct message tells you your numeric user id. Add that id to `telegram_allow_from` and restart serve.
 

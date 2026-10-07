@@ -19,6 +19,7 @@ const state = {
   stream: null,
   transcriptVersion: 0,
   modelsLoaded: false,
+  skillsExpanded: false,
   refreshRunning: false,
 };
 const approvals = new ApprovalLedger();
@@ -274,11 +275,18 @@ function renderStatus(status) {
   }
   $('skills').replaceChildren();
   $('skill-count').textContent = String(status.skills?.length || 0);
-  for (const name of status.skills || []) {
+  const skillNames = status.skills || [];
+  for (const name of state.skillsExpanded ? skillNames : skillNames.slice(0, 8)) {
     const button = node('button', 'skill-button', `/${name}`);
     button.type = 'button';
     button.addEventListener('click', () => { $('input').value = `/${name} `; setTab('conversation'); $('input').focus(); renderControls(); closeDrawers(); });
     $('skills').append(button);
+  }
+  if (skillNames.length > 8) {
+    const expand = node('button', 'skill-button', state.skillsExpanded ? 'Show fewer' : `Show all ${skillNames.length}`);
+    expand.type = 'button';
+    expand.addEventListener('click', () => { state.skillsExpanded = !state.skillsExpanded; renderStatus(state.status); });
+    $('skills').append(expand);
   }
   if (!status.skills?.length) $('skills').append(node('span', 'muted', 'No skills loaded'));
   if (state.modelsLoaded && [...$('model').options].some((option) => option.value === status.model)) $('model').value = status.model;
@@ -531,7 +539,7 @@ async function sendMessage(event) {
     const response = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json', Accept: 'text/event-stream' }),
-      body: JSON.stringify({ message: text, session_id: session }),
+      body: JSON.stringify({ message: text, session_id: session, model: $('model').value || state.status.model }),
     });
     if (response.status === 401) throw new Error('Authentication required. Add the dashboard token in Connection.');
     if (!response.ok) throw new Error(`Turn request failed with HTTP ${response.status}.`);
