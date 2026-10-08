@@ -17,6 +17,37 @@ proxy_url = "http://127.0.0.1:8787"
 # provider = "anthropic"
 # anthropic_base_url = "https://api.anthropic.com"
 # anthropic_api_key = "set via ANTHROPIC_API_KEY"
+# Official Google Gemini endpoint (API key):
+# provider = "google"
+# model = "gemini-2.5-pro"
+# google_api_key = "set via GOOGLE_API_KEY or GEMINI_API_KEY"
+# google_auth = "api-key"  # api-key | oauth
+# Official Google Vertex AI endpoint (OAuth):
+# provider = "google-vertex"
+# google_auth = "oauth"
+# google_project = "your-gcp-project"
+# google_location = "us-central1"  # or "global"
+# Sign in once with: varynth google login --client-id <installed-app-client-id>
+#   then use google_auth = "oauth" (works for both Gemini and Vertex).
+# Automatic sign-in: with google_auth = "oauth" and no stored credential,
+# model-using commands open the browser login automatically when a non-secret
+# OAuth client id is configured. Enabled by default; disable with:
+# google_auto_login = false
+# google_client_id = "<installed-app-client-id>"  # or VARYNTH_GOOGLE_CLIENT_ID
+# Optional overrides (rarely needed):
+# google_base_url = "https://generativelanguage.googleapis.com"
+# Named provider profiles: multiple endpoints selected by `provider = "<id>"`
+# or by a model id prefixed `<id>/`. Antigravity-style gateways connect through
+# an OpenAI-compatible profile with a base URL the user supplies:
+# [[provider_profiles]]
+# id = "antigravity"
+# kind = "openai"            # proxy | openai | anthropic | google | google-vertex
+# name = "Antigravity gateway"
+# base_url = "https://your-openai-compatible-gateway.example"
+# api_key_env = "ANTIGRAVITY_API_KEY"   # or api_key = "..." (keyring preferred)
+# # keyring_field = "antigravity"       # per-profile keyring slot
+# # models = ["model-a", "model-b"]     # pinned fallback catalog entries
+# enabled = true
 # effort = "xhigh"  # one of: low, medium, high, xhigh, max, ultra
 # max_tokens = 8192  # optional cap on model output tokens
 # temperature = 0.7  # optional sampling temperature

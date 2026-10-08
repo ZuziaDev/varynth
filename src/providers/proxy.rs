@@ -120,18 +120,19 @@ impl Provider for ProxyProvider {
             )
         })?;
         let message = choice.get("message").cloned().unwrap_or(Value::Null);
-        let content = message
-            .get("content")
-            .and_then(|c| c.as_str())
-            .unwrap_or("")
-            .to_string();
+        let (content, images) = super::parse_openai_message(&message)?;
         let tool_calls = message
             .get("tool_calls")
             .map(|t| parse_openai_tool_calls(t))
             .unwrap_or_default();
+        anyhow::ensure!(
+            !content.trim().is_empty() || !images.is_empty() || !tool_calls.is_empty(),
+            "Proxy returned an empty completion"
+        );
         Ok(Completion {
             usage: usage_from_openai(&v),
             text: content,
+            images,
             tool_calls,
             model: v
                 .get("model")

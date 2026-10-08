@@ -1,6 +1,6 @@
 [package]
 name = "varynth"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Varynth local coding workspace with a TUI, secure tools, MCP, goals and an operator dashboard"
 license = "MIT"
@@ -55,6 +55,7 @@ clap = { version = "4", features = ["derive", "env"] }
 crossterm = "0.28"
 dirs = "6"
 glob = "0.3"
+image = { version = "0.24", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 keyring = { version = "3", features = ["windows-native"] }
 png = "0.17"
 ratatui = "0.29"
@@ -67,6 +68,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 rustyline = "15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 similar = "2"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }

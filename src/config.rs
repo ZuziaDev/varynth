@@ -16,6 +16,21 @@ pub struct Config {
     pub openai_api_key: Option<String>,
     pub anthropic_base_url: Option<String>,
     pub openai_base_url: Option<String>,
+    pub google_api_key: Option<String>,
+    pub google_base_url: Option<String>,
+    pub google_project: Option<String>,
+    pub google_location: Option<String>,
+    pub google_auth: String,
+    /// Non-secret OAuth client id (installed app) used by the automatic
+    /// Google sign-in preflight. Never a secret, so it is safe to keep in
+    /// config.toml and is never redacted on save.
+    #[serde(default)]
+    pub google_client_id: Option<String>,
+    /// Start the Google browser sign-in automatically when a Google OAuth
+    /// provider is selected without a stored credential. Enabled by default.
+    #[serde(default = "default_google_auto_login")]
+    pub google_auto_login: bool,
+    pub provider_profiles: Vec<ProviderProfile>,
     pub dashboard_host: String,
     pub dashboard_port: u16,
     #[serde(default)]
@@ -54,8 +69,71 @@ pub struct Config {
     pub theme: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProviderProfile {
+    pub id: String,
+    pub kind: String,
+    pub name: Option<String>,
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+    pub api_key_env: Option<String>,
+    pub keyring_field: Option<String>,
+    pub models: Vec<String>,
+    pub enabled: bool,
+    pub auth: String,
+    pub project: Option<String>,
+    pub location: Option<String>,
+}
+
+impl Default for ProviderProfile {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            kind: "openai".into(),
+            name: None,
+            base_url: None,
+            api_key: None,
+            api_key_env: None,
+            keyring_field: None,
+            models: Vec::new(),
+            enabled: true,
+            auth: "api-key".into(),
+            project: None,
+            location: None,
+        }
+    }
+}
+
+pub const PROVIDER_KINDS: [&str; 5] = ["proxy", "openai", "anthropic", "google", "google-vertex"];
+
+pub fn valid_profile_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
 fn default_theme() -> String {
     "purple".into()
+}
+
+pub fn default_google_auto_login() -> bool {
+    true
+}
+
+/// Outcome of [`Config::google_auto_login_plan`]: the decision made before
+/// any model-using command or runtime reconfiguration runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GoogleAutoLoginPlan {
+    /// No action needed: provider does not use Google OAuth, or a credential
+    /// already exists.
+    Ready,
+    /// Start the browser sign-in flow with this client id.
+    Login { client_id: String },
+    /// Sign-in is required but cannot start; carry this actionable message.
+    Error(String),
 }
 
 fn default_effort() -> String {
@@ -75,6 +153,14 @@ impl Default for Config {
             openai_api_key: None,
             anthropic_base_url: None,
             openai_base_url: None,
+            google_api_key: None,
+            google_base_url: None,
+            google_project: None,
+            google_location: None,
+            google_auth: "api-key".into(),
+            google_client_id: None,
+            google_auto_login: default_google_auto_login(),
+            provider_profiles: Vec::new(),
             dashboard_host: "127.0.0.1".into(),
             dashboard_port: 7420,
             dashboard_token: None,
@@ -204,16 +290,183 @@ impl Config {
                 self.effort
             );
         }
-        if !matches!(self.provider.as_str(), "proxy" | "anthropic" | "openai") {
+        anyhow::ensure!(
+            matches!(self.google_auth.as_str(), "api-key" | "oauth"),
+            "google_auth must be api-key or oauth"
+        );
+        if let Some(client_id) = &self.google_client_id {
+            anyhow::ensure!(
+                !client_id.trim().is_empty()
+                    && client_id.len() <= 512
+                    && !client_id
+                        .chars()
+                        .any(|c| c.is_control() || c.is_whitespace()),
+                "google_client_id must be a non-empty single-line OAuth client id"
+            );
+        }
+        let mut ids = std::collections::HashSet::new();
+        for profile in &self.provider_profiles {
+            anyhow::ensure!(valid_profile_id(&profile.id), "invalid provider profile id");
+            anyhow::ensure!(
+                ids.insert(&profile.id),
+                "duplicate provider profile id: {}",
+                profile.id
+            );
+            anyhow::ensure!(PROVIDER_KINDS.contains(&profile.kind.as_str()), "invalid profile kind (expected proxy, openai, anthropic, google, or google-vertex)");
+            anyhow::ensure!(
+                matches!(profile.auth.as_str(), "api-key" | "oauth"),
+                "profile auth must be api-key or oauth"
+            );
+            anyhow::ensure!(
+                profile.auth != "oauth"
+                    || matches!(profile.kind.as_str(), "google" | "google-vertex"),
+                "OAuth is supported only by official Google providers"
+            );
+            if let Some(base) = &profile.base_url {
+                validate_provider_url(base)?;
+            }
+            if let Some(field) = &profile.keyring_field {
+                normalize_keyring_field(field)?;
+            }
+            if let Some(name) = &profile.api_key_env {
+                anyhow::ensure!(
+                    !name.is_empty()
+                        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'),
+                    "invalid api_key_env name"
+                );
+            }
+            anyhow::ensure!(
+                profile.models.iter().all(|m| !m.trim().is_empty()
+                    && m.len() <= 512
+                    && !m.chars().any(char::is_control)),
+                "invalid configured model id"
+            );
+        }
+        if !PROVIDER_KINDS.contains(&self.provider.as_str())
+            && !self
+                .provider_profiles
+                .iter()
+                .any(|p| p.enabled && p.id == self.provider)
+        {
             anyhow::bail!(
-                "invalid provider `{}` (expected proxy, anthropic, or openai)",
+                "invalid provider `{}` (expected proxy, anthropic, openai, google, google-vertex, or an enabled profile id)",
                 self.provider
+            );
+        }
+        if let Some(id) = self.selected_profile_id() {
+            anyhow::ensure!(
+                self.provider_profiles
+                    .iter()
+                    .any(|p| p.enabled && p.id == id),
+                "selected provider profile is disabled"
             );
         }
         Ok(())
     }
 
+    pub fn selected_profile_id(&self) -> Option<&str> {
+        if let Some((id, _)) = self.model.split_once('/') {
+            if let Some(profile) = self
+                .provider_profiles
+                .iter()
+                .find(|p| p.id == id && p.enabled)
+            {
+                return Some(&profile.id);
+            }
+        }
+        self.provider_profiles
+            .iter()
+            .find(|p| p.id == self.provider && p.enabled)
+            .map(|p| p.id.as_str())
+    }
+
+    pub fn select_model(&mut self, model: &str) -> Result<()> {
+        anyhow::ensure!(
+            !model.trim().is_empty() && model.len() <= 512 && !model.chars().any(char::is_control),
+            "model must be non-empty and at most 512 bytes"
+        );
+        if let Some((id, raw)) = model.split_once('/') {
+            if let Some(profile) = self.provider_profiles.iter().find(|p| p.id == id) {
+                anyhow::ensure!(
+                    profile.enabled && !raw.trim().is_empty(),
+                    "selected provider profile is disabled or model is empty"
+                );
+                self.provider = profile.id.clone();
+            }
+        }
+        self.model = model.into();
+        Ok(())
+    }
+
+    pub fn profile_config(&self, profile: &ProviderProfile) -> Result<Self> {
+        let mut cfg = self.clone();
+        cfg.provider_profiles.clear();
+        cfg.provider = profile.kind.clone();
+        cfg.proxy_token = None;
+        cfg.openai_api_key = None;
+        cfg.anthropic_api_key = None;
+        cfg.google_api_key = None;
+        cfg.proxy_url = profile
+            .base_url
+            .clone()
+            .unwrap_or_else(|| "http://127.0.0.1:8787".into());
+        cfg.openai_base_url = profile.base_url.clone();
+        cfg.anthropic_base_url = profile.base_url.clone();
+        cfg.google_base_url = profile.base_url.clone();
+        cfg.google_auth = profile.auth.clone();
+        cfg.google_project = profile.project.clone();
+        cfg.google_location = profile.location.clone();
+        if let Some((id, raw)) = self.model.split_once('/') {
+            if id == profile.id {
+                cfg.model = raw.into();
+            }
+        }
+        let mut key = profile.api_key.clone().filter(|s| !s.trim().is_empty());
+        if let Some(name) = &profile.api_key_env {
+            if let Ok(value) = std::env::var(name) {
+                key = (!value.trim().is_empty()).then_some(value);
+            }
+        }
+        if key.is_none() && self.use_keyring == Some(true) && profile.auth != "oauth" {
+            key = match &profile.keyring_field {
+                Some(field) => keyring_get(field)?,
+                None => profile_keyring_get(&profile.id)?,
+            };
+        }
+        match profile.kind.as_str() {
+            "proxy" => cfg.proxy_token = key,
+            "openai" => cfg.openai_api_key = key,
+            "anthropic" => cfg.anthropic_api_key = key,
+            "google" | "google-vertex" => cfg.google_api_key = key,
+            _ => anyhow::bail!("unsupported provider kind"),
+        }
+        Ok(cfg)
+    }
+
+    pub fn active_provider_config(&self) -> Result<Self> {
+        match self.selected_profile_id() {
+            Some(id) => {
+                let profile = self
+                    .provider_profiles
+                    .iter()
+                    .find(|p| p.id == id && p.enabled)
+                    .context("selected provider profile is disabled")?;
+                self.profile_config(profile)
+            }
+            None => {
+                let mut cfg = self.clone();
+                cfg.provider_profiles.clear();
+                Ok(cfg)
+            }
+        }
+    }
+
     pub fn require_provider_credentials(&self) -> Result<()> {
+        if self.selected_profile_id().is_some() {
+            return self
+                .active_provider_config()?
+                .require_provider_credentials();
+        }
         let provider = self.provider.trim().to_ascii_lowercase();
         let configured = match provider.as_str() {
             "proxy" => self
@@ -228,10 +481,23 @@ impl Config {
                 .anthropic_api_key
                 .as_deref()
                 .is_some_and(|v| !v.trim().is_empty()),
+            "google" if self.google_auth == "api-key" => self
+                .google_api_key
+                .as_deref()
+                .is_some_and(|v| !v.trim().is_empty()),
+            "google" | "google-vertex" => crate::google_auth::is_authenticated()?,
             other => anyhow::bail!("unsupported provider: {other}"),
         };
         if configured {
             Ok(())
+        } else if provider == "google" && self.google_auth == "api-key" {
+            anyhow::bail!(
+                "provider credentials are required for 'google'; set google_api_key (or GOOGLE_API_KEY), or switch to google_auth = \"oauth\" and run `varynth google login --client-id <CLIENT_ID>`"
+            )
+        } else if provider == "google" || provider == "google-vertex" {
+            anyhow::bail!(
+                "provider credentials are required for '{provider}'; run `varynth google login --client-id <CLIENT_ID>` or set google_client_id (VARYNTH_GOOGLE_CLIENT_ID) to enable automatic sign-in"
+            )
         } else {
             anyhow::bail!(
                 "provider credentials are required for '{}'; configure the provider API key/token before starting the agent",
@@ -247,6 +513,60 @@ impl Config {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(".varynth")
+    }
+
+    /// Decide what the automatic Google sign-in preflight should do for this
+    /// configuration before a model-using command starts.
+    ///
+    /// `Ready` means a Google OAuth credential already exists, or the selected
+    /// provider does not use Google OAuth at all, so nothing must happen.
+    /// `Login` means the selected provider is `google`/`google-vertex` with
+    /// `google_auth = "oauth"` (directly or through a profile), no stored
+    /// credential exists, auto-login is enabled and a client id is available.
+    /// `Error` returns an explicit, actionable message when login cannot run.
+    pub fn google_auto_login_plan(&self) -> GoogleAutoLoginPlan {
+        let effective = match self.selected_profile_id() {
+            Some(_) => match self.active_provider_config() {
+                Ok(cfg) => cfg,
+                Err(_) => return GoogleAutoLoginPlan::Ready,
+            },
+            None => {
+                let mut cfg = self.clone();
+                cfg.provider_profiles.clear();
+                cfg
+            }
+        };
+        let is_google_oauth = (effective.provider == "google-vertex"
+            || (effective.provider == "google" && effective.google_auth == "oauth"))
+            && effective.google_auth == "oauth";
+        if !is_google_oauth {
+            return GoogleAutoLoginPlan::Ready;
+        }
+        // A stored credential satisfies the OAuth requirement without any
+        // browser flow; keyring backend failures read as "not authenticated"
+        // so the login path (or its actionable error) still runs.
+        match crate::google_auth::is_authenticated() {
+            Ok(true) => GoogleAutoLoginPlan::Ready,
+            _ => self.google_login_decision(),
+        }
+    }
+
+    fn google_login_decision(&self) -> GoogleAutoLoginPlan {
+        if !self.google_auto_login {
+            return GoogleAutoLoginPlan::Error(
+                "Google OAuth is selected without a stored credential and google_auto_login is disabled; run `varynth google login --client-id <CLIENT_ID>`"
+                    .into(),
+            );
+        }
+        match self.google_client_id.as_deref() {
+            Some(id) if !id.trim().is_empty() => GoogleAutoLoginPlan::Login {
+                client_id: id.trim().to_string(),
+            },
+            _ => GoogleAutoLoginPlan::Error(format!(
+                "Google OAuth is selected but no client id is configured; set google_client_id in {} (or VARYNTH_GOOGLE_CLIENT_ID) or run `varynth google login --client-id <CLIENT_ID>`",
+                Self::config_path().display()
+            )),
+        }
     }
 
     pub fn config_path() -> PathBuf {
@@ -298,6 +618,10 @@ impl Config {
             cfg.proxy_token = None;
             cfg.anthropic_api_key = None;
             cfg.openai_api_key = None;
+            cfg.google_api_key = None;
+            for profile in &mut cfg.provider_profiles {
+                profile.api_key = None;
+            }
             cfg.telegram_bot_token = None;
             cfg.dashboard_token = None;
         }
@@ -319,6 +643,9 @@ impl Config {
         if let Ok(v) = std::env::var("VARYNTH_PROVIDER") {
             self.provider = v;
         }
+        if let Ok(v) = std::env::var("VARYNTH_PROFILE") {
+            self.provider = v;
+        }
         if let Ok(v) = std::env::var("VARYNTH_PROXY_URL") {
             self.proxy_url = v;
         }
@@ -336,6 +663,34 @@ impl Config {
         }
         if let Ok(v) = std::env::var("OPENAI_BASE_URL") {
             self.openai_base_url = Some(v);
+        }
+        if let Ok(v) = std::env::var("GOOGLE_API_KEY").or_else(|_| std::env::var("GEMINI_API_KEY"))
+        {
+            self.google_api_key = Some(v);
+        }
+        if let Ok(v) = std::env::var("GOOGLE_BASE_URL") {
+            self.google_base_url = Some(v);
+        }
+        if let Ok(v) = std::env::var("GOOGLE_CLOUD_PROJECT") {
+            self.google_project = Some(v);
+        }
+        if let Ok(v) = std::env::var("GOOGLE_CLOUD_LOCATION") {
+            self.google_location = Some(v);
+        }
+        if let Ok(v) = std::env::var("VARYNTH_GOOGLE_AUTH") {
+            self.google_auth = v;
+        }
+        if let Ok(v) = std::env::var("VARYNTH_GOOGLE_CLIENT_ID") {
+            if !v.trim().is_empty() {
+                self.google_client_id = Some(v);
+            }
+        }
+        if let Ok(v) = std::env::var("VARYNTH_GOOGLE_AUTO_LOGIN") {
+            match v.trim().to_ascii_lowercase().as_str() {
+                "1" | "true" | "yes" | "on" => self.google_auto_login = true,
+                "0" | "false" | "no" | "off" | "" => self.google_auto_login = false,
+                _ => {}
+            }
         }
         if let Ok(v) = std::env::var("VARYNTH_DASHBOARD_PORT") {
             if let Ok(p) = v.parse() {
@@ -379,6 +734,7 @@ impl Config {
             ("proxy-token", &mut self.proxy_token),
             ("anthropic-api-key", &mut self.anthropic_api_key),
             ("openai-api-key", &mut self.openai_api_key),
+            ("google-api-key", &mut self.google_api_key),
             ("telegram-bot-token", &mut self.telegram_bot_token),
             ("dashboard-token", &mut self.dashboard_token),
         ];
@@ -416,12 +772,63 @@ impl Config {
     }
 }
 
+pub fn validate_provider_url(raw: &str) -> Result<()> {
+    let url = reqwest::Url::parse(raw).map_err(|_| anyhow::anyhow!("invalid provider base URL"))?;
+    anyhow::ensure!(
+        matches!(url.scheme(), "http" | "https") && url.host_str().is_some(),
+        "provider URL must be HTTP(S)"
+    );
+    anyhow::ensure!(
+        url.username().is_empty()
+            && url.password().is_none()
+            && url.query().is_none()
+            && url.fragment().is_none(),
+        "provider URL cannot contain credentials, query, or fragment"
+    );
+    Ok(())
+}
+
+pub fn profile_keyring_name(id: &str) -> Result<String> {
+    anyhow::ensure!(valid_profile_id(id), "invalid provider profile id");
+    Ok(format!("varynth/provider-profile/{id}/api-key"))
+}
+
+fn profile_keyring_entry(id: &str) -> Result<keyring::Entry> {
+    keyring::Entry::new("varynth", &profile_keyring_name(id)?).context("open profile keyring entry")
+}
+
+pub fn profile_keyring_get(id: &str) -> Result<Option<String>> {
+    match profile_keyring_entry(id)?.get_password() {
+        Ok(value) => Ok(Some(value)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(_) => anyhow::bail!("profile keyring read failed"),
+    }
+}
+
+pub fn profile_keyring_set(id: &str, value: &str) -> Result<()> {
+    anyhow::ensure!(
+        !value.trim().is_empty() && !value.chars().any(char::is_control),
+        "invalid profile credential"
+    );
+    profile_keyring_entry(id)?
+        .set_password(value)
+        .map_err(|_| anyhow::anyhow!("profile keyring write failed"))
+}
+
+pub fn profile_keyring_delete(id: &str) -> Result<()> {
+    match profile_keyring_entry(id)?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(_) => anyhow::bail!("profile keyring delete failed"),
+    }
+}
+
 /// Secret fields that can live in the OS keyring (service `varynth`), in
 /// their canonical dash-separated form.
-pub const KEYRING_FIELDS: [&str; 5] = [
+pub const KEYRING_FIELDS: [&str; 6] = [
     "proxy-token",
     "anthropic-api-key",
     "openai-api-key",
+    "google-api-key",
     "telegram-bot-token",
     "dashboard-token",
 ];

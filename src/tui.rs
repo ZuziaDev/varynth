@@ -561,8 +561,11 @@ impl SettingsDialog {
             0 => self.draft.theme = crate::theme::Theme::ALL[selected].name().into(),
             1 => match selected {
                 0 => {
-                    self.draft.provider =
-                        cycle(&self.draft.provider, &["proxy", "openai", "anthropic"], 1)
+                    self.draft.provider = cycle(
+                        &self.draft.provider,
+                        &["proxy", "openai", "anthropic", "google", "google-vertex"],
+                        1,
+                    )
                 }
                 5 => self.draft.effort = cycle(&self.draft.effort, &Runtime::EFFORT_LEVELS, 1),
                 _ => {
@@ -624,6 +627,7 @@ fn set_secret(cfg: &mut Config, field: &str, value: String) {
         "proxy-token" => cfg.proxy_token = Some(value),
         "openai-api-key" => cfg.openai_api_key = Some(value),
         "anthropic-api-key" => cfg.anthropic_api_key = Some(value),
+        "google-api-key" => cfg.google_api_key = Some(value),
         "telegram-bot-token" => cfg.telegram_bot_token = Some(value),
         "dashboard-token" => cfg.dashboard_token = Some(value),
         _ => {}
@@ -635,6 +639,10 @@ fn persistence_config(cfg: &Config) -> Config {
     safe.proxy_token = None;
     safe.openai_api_key = None;
     safe.anthropic_api_key = None;
+    safe.google_api_key = None;
+    for profile in &mut safe.provider_profiles {
+        profile.api_key = None;
+    }
     safe.telegram_bot_token = None;
     safe.dashboard_token = None;
     safe
@@ -664,7 +672,7 @@ fn apply_settings(rt: &mut Runtime, cfg: Config) -> Result<()> {
 fn change_setting(rt: &mut Runtime, field: &str, value: &str) -> Result<()> {
     let mut cfg = rt.cfg.clone();
     match field {
-        "model" => cfg.model = value.into(),
+        "model" => cfg.select_model(value)?,
         "effort" => cfg.effort = value.into(),
         "permission" => cfg.permission_mode = value.into(),
         "sandbox" => cfg.sandbox = value.into(),
@@ -3237,7 +3245,7 @@ fn draw_header(
                     .add_modifier(Modifier::BOLD),
             ));
             s.push(Span::styled(
-                "  v0.1.0",
+                format!("  v{}", env!("CARGO_PKG_VERSION")),
                 Style::default().fg(Palette::dim()),
             ));
             s
@@ -4138,8 +4146,13 @@ mod tests {
         cfg.proxy_token = Some("private-proxy".into());
         cfg.openai_api_key = Some("private-openai".into());
         cfg.anthropic_api_key = Some("private-anthropic".into());
+        cfg.google_api_key = Some("private-google".into());
         cfg.telegram_bot_token = Some("private-telegram".into());
         cfg.dashboard_token = Some("private-dashboard".into());
+        cfg.provider_profiles = vec![crate::config::ProviderProfile {
+            api_key: Some("private-profile".into()),
+            ..Default::default()
+        }];
         let raw = toml::to_string(&persistence_config(&cfg)).unwrap();
         assert!(!raw.contains("private-"));
         assert!(raw.contains("model"));

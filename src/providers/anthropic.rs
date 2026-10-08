@@ -438,6 +438,7 @@ impl Provider for AnthropicProvider {
             usage: usage_from_anthropic(&v),
             text: out_text,
             tool_calls,
+            images: Vec::new(),
             model: v
                 .get("model")
                 .and_then(|m| m.as_str())
@@ -487,6 +488,7 @@ impl Provider for AnthropicProvider {
         Ok(Completion {
             text: acc.text.clone(),
             tool_calls: acc.tool_calls(),
+            images: Vec::new(),
             model: acc.model.clone().unwrap_or_else(|| model.to_string()),
             usage: acc.usage,
         })

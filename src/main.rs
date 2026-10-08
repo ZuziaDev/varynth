@@ -10,7 +10,9 @@ use varynth::config::{
 };
 use varynth::runtime::Runtime;
 use varynth::session::Session;
-use varynth::{channels, dashboard, doctor, install, mcp, plugins, skills_search, tui};
+use varynth::{
+    channels, dashboard, doctor, google_auth, install, mcp, plugins, skills_search, tui,
+};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -25,7 +27,7 @@ struct Cli {
     /// Model id (provider:name on proxy)
     #[arg(short, long)]
     model: Option<String>,
-    /// Provider: proxy | anthropic | openai
+    /// Provider: proxy | anthropic | openai | google | google-vertex, or a configured profile id
     #[arg(long)]
     provider: Option<String>,
     /// Permission mode: acceptEdits | prompt | bypass
@@ -57,7 +59,12 @@ enum Commands {
     Resume { id: Option<String> },
     /// List saved sessions
     Sessions,
-    /// List models from the active provider
+    /// Google OAuth login, status, or logout
+    Google {
+        #[command(subcommand)]
+        command: GoogleCommand,
+    },
+    /// List models from the active provider or all configured profiles
     Models,
     /// Health / auth / proxy checks
     Doctor {
@@ -121,6 +128,20 @@ enum KeyringCommand {
     Delete { field: String },
     /// Print field presence only, never secret values.
     Status,
+}
+
+#[derive(Subcommand, Debug)]
+enum GoogleCommand {
+    Login {
+        #[arg(long)]
+        client_id: String,
+        #[arg(long)]
+        client_secret: Option<String>,
+        #[arg(long)]
+        no_browser: bool,
+    },
+    Status,
+    Logout,
 }
 
 #[derive(Subcommand, Debug)]
@@ -194,7 +215,7 @@ async fn main() -> Result<()> {
     Config::ensure_home()?;
     let mut cfg = Config::load()?;
     if let Some(m) = cli.model {
-        cfg.model = m;
+        cfg.select_model(&m)?;
     }
     if let Some(p) = cli.provider {
         cfg.provider = p;
@@ -229,6 +250,20 @@ async fn main() -> Result<()> {
         }
     }
     cfg.validate()?;
+    let uses_model = matches!(
+        cli.command.as_ref().unwrap_or(&Commands::Repl),
+        Commands::Exec { .. }
+            | Commands::Models
+            | Commands::Resume { .. }
+            | Commands::Repl
+            | Commands::Serve { .. }
+            | Commands::Task {
+                command: TaskCommand::Run { .. }
+            }
+    );
+    if uses_model {
+        google_auth::preflight(&cfg, false).await?;
+    }
 
     match cli.command.unwrap_or(Commands::Repl) {
         Commands::Init => {
@@ -247,6 +282,19 @@ async fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Commands::Keyring { command } => handle_keyring(command)?,
+        Commands::Google { command } => match command {
+            GoogleCommand::Login {
+                client_id,
+                client_secret,
+                no_browser,
+            } => {
+                google_auth::login(&client_id, client_secret.as_deref(), no_browser).await?;
+            }
+            GoogleCommand::Status => {
+                println!("{}", serde_json::to_string_pretty(&google_auth::status()?)?)
+            }
+            GoogleCommand::Logout => google_auth::logout()?,
+        },
         Commands::Plugin { spec } => {
             let spec = if spec.is_empty() {
                 "list".into()

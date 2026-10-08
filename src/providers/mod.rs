@@ -1,14 +1,19 @@
 use std::time::Duration;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, ensure, Context, Result};
+use base64::{
+    engine::general_purpose::{STANDARD, STANDARD_NO_PAD},
+    Engine,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio_stream::StreamExt;
 
 use crate::config::Config;
-use crate::session::{ChatMessage, ToolCall};
+use crate::session::{ChatMessage, ImageAttachment, ToolCall};
 
 mod anthropic;
+mod google;
 mod openai;
 mod proxy;
 
@@ -24,6 +29,7 @@ pub struct Usage {
 pub struct Completion {
     pub text: String,
     pub tool_calls: Vec<ToolCall>,
+    pub images: Vec<ImageAttachment>,
     pub model: String,
     /// Provider-reported token usage; `None` when the response carries none.
     pub usage: Option<Usage>,
@@ -66,12 +72,150 @@ pub trait Provider: Send + Sync {
 }
 
 pub fn build(cfg: &Config) -> Result<Box<dyn Provider>> {
+    let effective = cfg.active_provider_config()?;
+    let provider = build_single(&effective)?;
+    if cfg.provider_profiles.is_empty() {
+        return Ok(provider);
+    }
+    Ok(Box::new(ProfileProvider {
+        cfg: cfg.clone(),
+        active: provider,
+        model: effective.model,
+    }))
+}
+
+fn build_single(cfg: &Config) -> Result<Box<dyn Provider>> {
     match cfg.provider.as_str() {
         "anthropic" => Ok(Box::new(anthropic::AnthropicProvider::new(cfg)?)),
         "openai" => Ok(Box::new(openai::OpenAiProvider::new(cfg)?)),
         "proxy" => Ok(Box::new(proxy::ProxyProvider::new(cfg)?)),
-        other => bail!("unknown provider `{other}` (proxy | anthropic | openai)"),
+        "google" | "google-vertex" => Ok(Box::new(google::GoogleProvider::new(cfg)?)),
+        _ => bail!("unknown provider (proxy | anthropic | openai | google | google-vertex)"),
     }
+}
+
+struct ProfileProvider {
+    cfg: Config,
+    active: Box<dyn Provider>,
+    model: String,
+}
+
+#[async_trait::async_trait]
+impl Provider for ProfileProvider {
+    async fn complete(
+        &self,
+        _model: &str,
+        system: &str,
+        messages: &[ChatMessage],
+        tools: &[Value],
+    ) -> Result<Completion> {
+        self.active
+            .complete(&self.model, system, messages, tools)
+            .await
+    }
+
+    async fn complete_streaming(
+        &self,
+        _model: &str,
+        system: &str,
+        messages: &[ChatMessage],
+        tools: &[Value],
+        on_delta: &mut (dyn for<'a> FnMut(&'a str) + Send),
+    ) -> Result<Completion> {
+        self.active
+            .complete_streaming(&self.model, system, messages, tools, on_delta)
+            .await
+    }
+
+    async fn list_models(&self) -> Result<Vec<CatalogModel>> {
+        let mut out = Vec::new();
+        let mut failures = 0;
+        if self.cfg.selected_profile_id().is_none() {
+            match tokio::time::timeout(Duration::from_secs(15), self.active.list_models()).await {
+                Ok(Ok(models)) => out.extend(models),
+                _ => failures += 1,
+            }
+        }
+        for profile in self.cfg.provider_profiles.iter().filter(|p| p.enabled) {
+            let configured = profile.models.iter().map(|id| CatalogModel {
+                id: id.clone(),
+                display_name: None,
+                owned_by: None,
+            });
+            let mut models = configured.collect::<Vec<_>>();
+            let fetched = async {
+                let cfg = self.cfg.profile_config(profile)?;
+                cfg.require_provider_credentials()?;
+                build_single(&cfg)?.list_models().await
+            };
+            match tokio::time::timeout(Duration::from_secs(15), fetched).await {
+                Ok(Ok(live)) => models.extend(live),
+                _ => {
+                    failures += 1;
+                    tracing::warn!(profile = %profile.id, "provider catalog unavailable; retaining configured entries");
+                }
+            }
+            for mut model in models {
+                let native = model.id.clone();
+                model.id = format!("{}/{native}", profile.id);
+                model.display_name = Some(format!(
+                    "{} / {}",
+                    profile.name.as_deref().unwrap_or(&profile.id),
+                    model.display_name.as_deref().unwrap_or(&native)
+                ));
+                out.push(model);
+            }
+        }
+        out.sort_by(|a, b| {
+            a.id.cmp(&b.id)
+                .then_with(|| b.display_name.cmp(&a.display_name))
+        });
+        out.dedup_by(|a, b| a.id == b.id);
+        anyhow::ensure!(
+            !out.is_empty() || failures == 0,
+            "no provider model catalog is available"
+        );
+        Ok(out)
+    }
+}
+
+pub(crate) fn api_v1_base(raw: &str) -> Result<String> {
+    crate::config::validate_provider_url(raw)?;
+    let base = raw.trim_end_matches('/');
+    Ok(if base.ends_with("/v1") {
+        base.to_string()
+    } else {
+        format!("{base}/v1")
+    })
+}
+
+pub(crate) fn parse_models_catalog(v: &Value) -> Result<Vec<CatalogModel>> {
+    let entries = v
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("model catalog must contain a data array"))?;
+    let mut out = Vec::new();
+    for model in entries {
+        let id = model
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| {
+                !id.trim().is_empty() && id.len() <= 512 && !id.chars().any(char::is_control)
+            })
+            .ok_or_else(|| anyhow::anyhow!("model catalog contains an invalid model id"))?;
+        out.push(CatalogModel {
+            id: id.into(),
+            display_name: model
+                .get("display_name")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            owned_by: model
+                .get("owned_by")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        });
+    }
+    Ok(out)
 }
 
 /// A provider HTTP response reduced to its status code and body text.
@@ -232,6 +376,8 @@ pub(crate) async fn ensure_sse_response(
 #[derive(Default)]
 pub(crate) struct OpenAiStreamAcc {
     text: String,
+    images: Vec<ImageAttachment>,
+    error: Option<String>,
     tool_calls: Vec<OpenAiToolCallAcc>,
     usage: Option<Usage>,
     model: Option<String>,
@@ -268,6 +414,22 @@ impl OpenAiStreamAcc {
                 self.text.push_str(text);
                 delta_text = text.to_string();
             }
+            if let Some(images) = delta.get("images") {
+                if let Some(items) = images.as_array() {
+                    for item in items {
+                        if let Some(url) = item.pointer("/image_url/url").and_then(Value::as_str) {
+                            if let Ok(Some(image)) = data_url_image(url) {
+                                self.images.push(image);
+                            }
+                        }
+                    }
+                    if validate_output_images(&self.images).is_err() {
+                        self.error = Some("OpenAI stream exceeded image limits".into());
+                    }
+                } else {
+                    self.error = Some("OpenAI stream returned malformed image content".into());
+                }
+            }
             if let Some(calls) = delta.get("tool_calls").and_then(Value::as_array) {
                 for call in calls {
                     let idx = call
@@ -302,6 +464,7 @@ impl OpenAiStreamAcc {
     pub(crate) fn finish(&self, fallback_model: &str) -> Completion {
         Completion {
             text: self.text.clone(),
+            images: self.images.clone(),
             tool_calls: self
                 .tool_calls
                 .iter()
@@ -335,12 +498,22 @@ pub(crate) async fn read_openai_stream(
     while let Some(chunk) = stream.try_next().await? {
         for ev in parser.feed(&chunk) {
             let delta = acc.apply(&ev.data);
+            if let Some(error) = &acc.error {
+                bail!("{error}");
+            }
             if !delta.is_empty() {
                 on_delta(&delta);
             }
         }
     }
-    Ok(acc.finish(fallback_model))
+    let completion = acc.finish(fallback_model);
+    ensure!(
+        !completion.text.trim().is_empty()
+            || !completion.tool_calls.is_empty()
+            || !completion.images.is_empty(),
+        "OpenAI stream returned an empty completion"
+    );
+    Ok(completion)
 }
 
 /// Whether a response status should be retried. `attempt` is the number of
@@ -470,41 +643,158 @@ pub(crate) fn truncate(s: &str, n: usize) -> String {
 pub fn openai_messages(messages: &[ChatMessage]) -> Vec<Value> {
     messages
         .iter()
-        .map(|m| {
-            let content = if m.images.is_empty() {
-                Value::String(m.content.clone())
+        .map(|message| {
+            let content = if message.images.is_empty() {
+                Value::String(message.content.clone())
             } else {
-                let mut parts = vec![serde_json::json!({"type": "text", "text": m.content})];
-                parts.extend(m.images.iter().map(|img| {
-                    serde_json::json!({"type": "image_url", "image_url": {"url": img.data_url()}})
+                let mut parts = vec![serde_json::json!({"type": "text", "text": message.content})];
+                parts.extend(message.images.iter().map(|image| {
+                    serde_json::json!({"type": "image_url", "image_url": {"url": image.data_url()}})
                 }));
                 Value::Array(parts)
             };
-            let mut v = serde_json::json!({
-                "role": m.role,
-                "content": content,
-            });
-            if let Some(id) = &m.tool_call_id {
-                v["tool_call_id"] = Value::String(id.clone());
+            let mut value = serde_json::json!({"role": message.role, "content": content});
+            if let Some(id) = &message.tool_call_id {
+                value["tool_call_id"] = serde_json::json!(id);
             }
-            if let Some(calls) = &m.tool_calls {
-                v["tool_calls"] = serde_json::json!(calls
-                    .iter()
-                    .map(|c| serde_json::json!({
-                        "id": c.id,
+            if let Some(calls) = &message.tool_calls {
+                value["tool_calls"] =
+                    serde_json::json!(calls.iter().map(|call| {
+                    serde_json::json!({
+                        "id": call.id,
                         "type": "function",
-                        "function": {
-                            "name": c.name,
-                            "arguments": c.arguments.to_string()
-                        }
-                    }))
-                    .collect::<Vec<_>>());
+                        "function": {"name": call.name, "arguments": call.arguments.to_string()}
+                    })
+                }).collect::<Vec<_>>());
             }
-            v
+            value
         })
         .collect()
 }
 
+/// Validate provider-generated image attachments using the same bounded media
+/// decoder used for user uploads, including batch count and decoded-size caps.
+pub(crate) fn validate_output_images(images: &[ImageAttachment]) -> Result<()> {
+    ensure!(
+        images.len() <= crate::media::MAX_MEDIA_COUNT,
+        "provider returned too many images"
+    );
+    let mut total = 0usize;
+    for image in images {
+        crate::media::validate_attachment(image)
+            .with_context(|| format!("invalid provider image {}", image.media_type))?;
+        let bytes = decode_image_base64(&image.data)?;
+        total = total
+            .checked_add(bytes.len())
+            .ok_or_else(|| anyhow::anyhow!("provider image size overflow"))?;
+        ensure!(
+            total <= crate::media::MAX_TOTAL_MEDIA_BYTES,
+            "provider images exceed the combined decoded size limit"
+        );
+    }
+    Ok(())
+}
+
+fn decode_image_base64(data: &str) -> Result<Vec<u8>> {
+    STANDARD
+        .decode(data)
+        .or_else(|_| STANDARD_NO_PAD.decode(data))
+        .context("decode image base64")
+}
+
+fn data_url_image(raw: &str) -> Result<Option<ImageAttachment>> {
+    if !raw.starts_with("data:") {
+        return Ok(None);
+    }
+    let (metadata, data) = raw
+        .split_once(',')
+        .ok_or_else(|| anyhow::anyhow!("malformed image data URL"))?;
+    let mut fields = metadata[5..].split(';');
+    let media_type = fields
+        .next()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("image data URL is missing its MIME type"))?;
+    ensure!(
+        fields.any(|field| field.eq_ignore_ascii_case("base64")),
+        "image data URL must use base64 encoding"
+    );
+    let image = ImageAttachment {
+        media_type: media_type.to_string(),
+        data: data.to_string(),
+    };
+    Ok(Some(image))
+}
+
+#[derive(Default)]
+struct OpenAiContent {
+    text: String,
+    images: Vec<ImageAttachment>,
+    external_images: usize,
+}
+
+fn parse_openai_content(content: &Value) -> Result<OpenAiContent> {
+    let mut out = OpenAiContent::default();
+    match content {
+        Value::Null => {}
+        Value::String(text) => out.text.push_str(text),
+        Value::Array(parts) => {
+            for part in parts {
+                let kind = part
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow::anyhow!("OpenAI content part is missing its type"))?;
+                match kind {
+                    "text" => out.text.push_str(
+                        part.get("text")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| anyhow::anyhow!("OpenAI text part is malformed"))?,
+                    ),
+                    "image_url" => {
+                        let url = part
+                            .pointer("/image_url/url")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| anyhow::anyhow!("OpenAI image part is malformed"))?;
+                        match data_url_image(url)? {
+                            Some(image) => out.images.push(image),
+                            None => out.external_images += 1,
+                        }
+                    }
+                    other => bail!("unsupported OpenAI content part type `{other}`"),
+                }
+            }
+        }
+        _ => bail!("OpenAI message content is malformed"),
+    }
+    Ok(out)
+}
+
+/// Parses an OpenAI-compatible assistant message, including OpenRouter's
+/// `message.images` extension. External image URLs are deliberately never
+/// fetched; they are ignored when usable text or data-URL images accompany
+/// them, and rejected when they are the only proposed output.
+pub(crate) fn parse_openai_message(message: &Value) -> Result<(String, Vec<ImageAttachment>)> {
+    let mut parsed = parse_openai_content(message.get("content").unwrap_or(&Value::Null))?;
+    if let Some(images) = message.get("images") {
+        let images = images
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("OpenAI message images must be an array"))?;
+        for image in images {
+            let url = image
+                .pointer("/image_url/url")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("OpenAI message image is malformed"))?;
+            match data_url_image(url)? {
+                Some(image) => parsed.images.push(image),
+                None => parsed.external_images += 1,
+            }
+        }
+    }
+    if parsed.text.trim().is_empty() && parsed.images.is_empty() && parsed.external_images > 0 {
+        bail!("OpenAI returned only unsupported external image URLs")
+    }
+    validate_output_images(&parsed.images)?;
+    Ok((parsed.text, parsed.images))
+}
 pub fn parse_openai_tool_calls(v: &Value) -> Vec<ToolCall> {
     let Some(arr) = v.as_array() else {
         return Vec::new();

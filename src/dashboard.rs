@@ -1,10 +1,15 @@
 use anyhow::Result;
+use axum::body::Bytes;
+use axum::extract::DefaultBodyLimit;
 use axum::extract::{Path, Request, State};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::{http::StatusCode, Json, Router};
+use axum::{
+    http::{HeaderMap, StatusCode},
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::path::{Path as FsPath, PathBuf};
@@ -14,9 +19,13 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_stream::StreamExt;
 
 use crate::config::Config;
+use crate::media;
 use crate::providers::CatalogModel;
 use crate::runtime::{AgentEvent, Runtime};
 use crate::session::{Session, SessionMeta};
+
+#[path = "studio.rs"]
+mod studio;
 
 #[derive(Clone, Default)]
 pub(crate) struct Snapshot {
@@ -127,6 +136,8 @@ pub struct ChatReq {
     pub message: String,
     pub session_id: Option<String>,
     pub model: Option<String>,
+    #[serde(default)]
+    pub media_ids: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -230,6 +241,26 @@ pub async fn serve(cfg: Config, cwd: PathBuf) -> Result<()> {
         .route("/api/chat/stream", post(api_chat_stream))
         .route("/api/channels", get(api_channels))
         .route("/api/doctor", get(api_doctor))
+        .route(
+            "/api/media",
+            post(api_media_upload).layer(DefaultBodyLimit::max(media::MAX_MEDIA_BYTES)),
+        )
+        .route("/api/media/{id}", get(api_media_get))
+        .route("/api/studio", get(api_studio))
+        .route("/api/studio/mcp/probe", post(api_studio_mcp_probe))
+        .route("/api/studio/mcp", post(api_studio_mcp_add))
+        .route("/api/studio/plugin", post(api_studio_plugin))
+        .route("/api/studio/provider", post(api_studio_provider))
+        .route(
+            "/api/studio/skill",
+            post(api_studio_skill).layer(DefaultBodyLimit::max(512 * 1024)),
+        )
+        .route(
+            "/api/theme",
+            get(api_theme)
+                .put(api_theme_update)
+                .layer(DefaultBodyLimit::max(crate::theme_tokens::MAX_THEME_BYTES)),
+        )
         .route("/v1/chat/completions", post(v1_chat_completions))
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(
@@ -239,6 +270,8 @@ pub async fn serve(cfg: Config, cwd: PathBuf) -> Result<()> {
     let app = host_guard(
         Router::new()
             .route("/", get(index))
+            .route("/studio", get(index))
+            .route("/studio/", get(index))
             .route("/health", get(|| async { "ok" }))
             .route("/diff", get(diff_page))
             .route("/diff.html", get(diff_page))
@@ -584,9 +617,19 @@ fn check_workspace(cwd: &FsPath, recorded: &str) -> Result<()> {
     Ok(())
 }
 
-fn prepare_chat(inner: &mut Inner, req: &ChatReq) -> Result<(), (StatusCode, String)> {
-    if req.message.trim().is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "message is required".into()));
+async fn prepare_chat(inner: &mut Inner, req: &ChatReq) -> Result<(), (StatusCode, String)> {
+    inner.runtime.pending_images.clear();
+    if req.message.trim().is_empty() && req.media_ids.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "message or image is required".into(),
+        ));
+    }
+    if !req.media_ids.is_empty() && local_media_command(&req.message) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "images cannot be attached to local commands".into(),
+        ));
     }
     if req.message.len() > 512 * 1024 {
         return Err((
@@ -620,6 +663,34 @@ fn prepare_chat(inner: &mut Inner, req: &ChatReq) -> Result<(), (StatusCode, Str
         .model
         .as_deref()
         .or_else(|| selected.as_ref().map(|s| s.meta.model.as_str()));
+    if crate::control_bus::ControlBus::default()
+        .is_paused(req.session_id.as_deref().unwrap_or(inner.session.id()))
+    {
+        return Err((
+            StatusCode::CONFLICT,
+            "session is paused; resume it before sending a message".into(),
+        ));
+    }
+    let ids = req.media_ids.clone();
+    let images = if ids.is_empty() {
+        Vec::new()
+    } else {
+        tokio::task::spawn_blocking(move || media::load_attachments(&ids))
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "media loader unavailable".into(),
+                )
+            })?
+            .map_err(|_| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    "invalid, missing, duplicate, or oversized image attachment".into(),
+                )
+            })?
+    };
+
     if let Some(model) = model {
         if model.trim().is_empty() || model.len() > 512 {
             return Err((
@@ -629,7 +700,15 @@ fn prepare_chat(inner: &mut Inner, req: &ChatReq) -> Result<(), (StatusCode, Str
         }
         if model != inner.runtime.cfg.model {
             let mut cfg = inner.runtime.cfg.clone();
-            cfg.model = model.into();
+            cfg.select_model(model)
+                .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+            // Async Google OAuth preflight: a profile/model switch that lands
+            // on Google OAuth without a stored credential either completes
+            // the browser sign-in here or fails with an actionable message,
+            // leaving the current runtime untouched.
+            crate::google_auth::preflight(&cfg, false)
+                .await
+                .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
             inner
                 .runtime
                 .reconfigure(cfg)
@@ -640,7 +719,32 @@ fn prepare_chat(inner: &mut Inner, req: &ChatReq) -> Result<(), (StatusCode, Str
         let Inner { runtime, session } = inner;
         install_session(session, selected, || runtime.reset_session_state());
     }
+    inner.runtime.pending_images = images;
     Ok(())
+}
+
+fn local_media_command(message: &str) -> bool {
+    let text = message.trim();
+    matches!(
+        text,
+        "/goal"
+            | "/goal status"
+            | "/goal clear"
+            | "/goal stop"
+            | "/goal --clear"
+            | "/undo"
+            | "/inbox"
+    ) || ["/plugin ", "/send ", "/undo ", "/inbox "]
+        .iter()
+        .any(|prefix| text.starts_with(prefix))
+}
+
+fn chat_prompt(req: &ChatReq) -> &str {
+    if req.message.trim().is_empty() {
+        "Describe these images."
+    } else {
+        &req.message
+    }
 }
 
 fn turn_progress(runtime: &Runtime, session: &Session) -> (u32, u64, usize) {
@@ -699,14 +803,448 @@ async fn api_doctor(State(st): State<AppState>) -> impl IntoResponse {
     }
 }
 
+fn request_media_type(headers: &HeaderMap) -> Option<&'static str> {
+    let explicit = headers
+        .get("x-media-type")
+        .map(|value| value.to_str().ok().and_then(studio::media_type));
+    if let Some(media) = explicit {
+        return media;
+    }
+    headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(studio::media_type)
+}
+
+async fn api_media_upload(
+    State(_st): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if body.is_empty() {
+        return request_error(StatusCode::BAD_REQUEST, "media body is empty");
+    }
+    if body.len() > media::MAX_MEDIA_BYTES {
+        return request_error(StatusCode::PAYLOAD_TOO_LARGE, "media exceeds 8 MiB");
+    }
+    let Some(media) = request_media_type(&headers) else {
+        return request_error(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "allowed media types are image/png, image/jpeg, image/webp, and image/gif",
+        );
+    };
+    let result = tokio::task::spawn_blocking(move || {
+        media::validate_image(media, &body).map_err(|_| StatusCode::UNSUPPORTED_MEDIA_TYPE)?;
+        media::store_image(media, &body).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    })
+    .await;
+    match result {
+        Ok(Ok(stored)) => Json(serde_json::json!({"ok": true, "id": stored.id, "mime": stored.mime, "size": stored.size, "url": stored.url})).into_response(),
+        Ok(Err(StatusCode::UNSUPPORTED_MEDIA_TYPE)) => request_error(StatusCode::UNSUPPORTED_MEDIA_TYPE, "invalid image type, bytes, or image limits"),
+        _ => request_error(StatusCode::INTERNAL_SERVER_ERROR, "media storage unavailable"),
+    }
+}
+
+async fn api_media_get(Path(id): Path<String>) -> Response {
+    match tokio::task::spawn_blocking(move || media::read_image(&id)).await {
+        Ok(Ok((mime, bytes))) => (
+            [
+                (axum::http::header::CONTENT_TYPE, mime),
+                (
+                    axum::http::header::CACHE_CONTROL,
+                    "private, no-store".into(),
+                ),
+            ],
+            bytes,
+        )
+            .into_response(),
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn api_studio(State(st): State<AppState>) -> Response {
+    let models = st.snap.read().await.models.clone();
+    let Ok(g) = st.inner.try_lock() else {
+        return request_error(
+            StatusCode::CONFLICT,
+            "runtime busy; retry after the active turn",
+        );
+    };
+    let skills = g
+        .runtime
+        .skills
+        .iter()
+        .map(|skill| crate::skills_search::SkillEntry {
+            name: skill.name.clone(),
+            description: skill.description.clone(),
+            source: skill.path.display().to_string(),
+            installs: None,
+        })
+        .collect();
+    Json(studio::studio_response(
+        &g.runtime.cfg,
+        &models,
+        g.runtime.mcp.status(),
+        skills,
+        &g.runtime.jail.cwd,
+    ))
+    .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct McpProbeReq {
+    #[serde(alias = "id")]
+    name: String,
+}
+
+async fn api_studio_mcp_probe(
+    State(st): State<AppState>,
+    Json(req): Json<McpProbeReq>,
+) -> Response {
+    let name = match studio::validate_identifier(&req.name, "server name") {
+        Ok(name) => name,
+        Err(error) => return request_error(StatusCode::BAD_REQUEST, error),
+    };
+    let mut g = st.inner.lock().await;
+    match g.runtime.mcp.probe_server(&name) {
+        Ok(status) => Json(serde_json::json!({
+            "ok": true,
+            "server": studio::mcp_rows(vec![status]).into_iter().next(),
+        }))
+        .into_response(),
+        Err(_) => {
+            let status = g
+                .runtime
+                .mcp
+                .status()
+                .into_iter()
+                .find(|status| status.name == name)
+                .map(|status| studio::mcp_rows(vec![status]).into_iter().next());
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({
+                    "ok": false,
+                    "error": "mcp probe failed",
+                    "server": status.flatten(),
+                })),
+            )
+                .into_response()
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct StudioMcpAddReq {
+    id: String,
+    url: String,
+}
+
+async fn api_studio_mcp_add(
+    State(st): State<AppState>,
+    Json(req): Json<StudioMcpAddReq>,
+) -> Response {
+    let id = match studio::validate_identifier(&req.id, "MCP server id") {
+        Ok(value) => value,
+        Err(error) => return request_error(StatusCode::BAD_REQUEST, error),
+    };
+    let url = match reqwest::Url::parse(req.url.trim()) {
+        Ok(value)
+            if matches!(value.scheme(), "http" | "https")
+                && value.username().is_empty()
+                && value.password().is_none() =>
+        {
+            value.to_string()
+        }
+        _ => {
+            return request_error(
+                StatusCode::BAD_REQUEST,
+                "MCP URL must be an HTTP(S) URL without credentials",
+            )
+        }
+    };
+    let g = st.inner.lock().await;
+    let path = g
+        .runtime
+        .cfg
+        .mcp_config
+        .clone()
+        .unwrap_or_else(|| g.runtime.jail.cwd.join(".varynth/mcp.json"));
+    let entry = serde_json::json!({"type":"http","url":url});
+    match crate::mcp::add_server_entry(&path, &id, &entry, false) {
+        Ok(()) => Json(serde_json::json!({"ok":true,"id":id})).into_response(),
+        Err(_) => request_error(StatusCode::BAD_REQUEST, "MCP server could not be added"),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StudioProviderReq {
+    id: String,
+    kind: String,
+    #[serde(default)]
+    base_url: Option<String>,
+    #[serde(default)]
+    models: Vec<String>,
+    #[serde(default)]
+    api_key_env: Option<String>,
+    #[serde(default)]
+    auth: Option<String>,
+    #[serde(default)]
+    project: Option<String>,
+    #[serde(default)]
+    location: Option<String>,
+}
+
+fn profile_update(cfg: &Config, req: StudioProviderReq) -> Result<Config> {
+    anyhow::ensure!(
+        crate::config::valid_profile_id(&req.id),
+        "invalid profile id"
+    );
+    anyhow::ensure!(
+        !req.models.is_empty() && req.models.len() <= 16,
+        "provide between 1 and 16 model ids"
+    );
+    let mut next = cfg.clone();
+    let existing = next
+        .provider_profiles
+        .iter()
+        .find(|profile| profile.id == req.id)
+        .cloned();
+    let mut profile = existing.clone().unwrap_or_default();
+    profile.id = req.id;
+    profile.kind = req.kind.trim().to_ascii_lowercase();
+    profile.models = req.models;
+    profile.base_url = req.base_url.filter(|value| !value.trim().is_empty());
+    profile.api_key_env = req.api_key_env.filter(|value| !value.trim().is_empty());
+    if let Some(auth) = req.auth.filter(|value| !value.trim().is_empty()) {
+        profile.auth = auth;
+    }
+    profile.project = req.project.filter(|value| !value.trim().is_empty());
+    profile.location = req.location.filter(|value| !value.trim().is_empty());
+    if let Some(index) = next
+        .provider_profiles
+        .iter()
+        .position(|item| item.id == profile.id)
+    {
+        next.provider_profiles[index] = profile;
+    } else {
+        anyhow::ensure!(
+            next.provider_profiles.len() < 64,
+            "provider profile limit reached"
+        );
+        next.provider_profiles.push(profile);
+    }
+    next.validate()?;
+    Ok(next)
+}
+
+fn persist_studio_config(next: &Config) -> Result<()> {
+    let path = Config::config_path();
+    if let Ok(meta) = std::fs::symlink_metadata(&path) {
+        anyhow::ensure!(
+            !meta.file_type().is_symlink() && meta.is_file() && meta.len() <= 512 * 1024,
+            "invalid configuration file"
+        );
+    }
+    std::fs::create_dir_all(Config::home_dir())?;
+    let _lock =
+        crate::control_bus::FileLock::acquire(Config::home_dir().join(".studio-config.lock"))?;
+    let mut saved: Config = if path.exists() {
+        toml::from_str(&std::fs::read_to_string(&path)?)?
+    } else {
+        Config::default()
+    };
+    let old = std::mem::take(&mut saved.provider_profiles);
+    saved.provider_profiles = next
+        .provider_profiles
+        .iter()
+        .map(|profile| {
+            let mut safe = profile.clone();
+            safe.api_key = old
+                .iter()
+                .find(|previous| previous.id == profile.id)
+                .and_then(|previous| previous.api_key.clone());
+            safe
+        })
+        .collect();
+    saved.mcp_config = next.mcp_config.clone();
+    saved.save()
+}
+
+async fn api_studio_provider(
+    State(st): State<AppState>,
+    Json(req): Json<StudioProviderReq>,
+) -> Response {
+    let Ok(mut g) = st.inner.try_lock() else {
+        return request_error(
+            StatusCode::CONFLICT,
+            "runtime busy; retry after the active turn",
+        );
+    };
+    let id = req.id.clone();
+    let cfg = match profile_update(&g.runtime.cfg, req) {
+        Ok(cfg) => cfg,
+        Err(error) => return request_error(StatusCode::BAD_REQUEST, error.to_string()),
+    };
+    if g.runtime
+        .reconfigure_with_persist(cfg, persist_studio_config)
+        .is_err()
+    {
+        return request_error(
+            StatusCode::BAD_REQUEST,
+            "profile could not be validated or saved; current runtime is unchanged",
+        );
+    }
+    {
+        let mut snap = st.snap.write().await;
+        snap.models
+            .retain(|model| !model.id.starts_with(&format!("{id}/")));
+        for profile in g.runtime.cfg.provider_profiles.iter().filter(|p| p.enabled) {
+            for model in &profile.models {
+                let qualified = format!("{}/{model}", profile.id);
+                if !snap.models.iter().any(|item| item.id == qualified) {
+                    snap.models.push(CatalogModel {
+                        id: qualified,
+                        display_name: Some(format!("{} / {model}", profile.id)),
+                        owned_by: None,
+                    });
+                }
+            }
+        }
+    }
+    st.refresh_snapshot(&g, false).await;
+    Json(serde_json::json!({"ok":true,"profile":id})).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct StudioSkillReq {
+    source: String,
+}
+
+async fn api_studio_skill(
+    State(_st): State<AppState>,
+    Json(req): Json<StudioSkillReq>,
+) -> Response {
+    let source = req.source.trim();
+    if source.is_empty() || source.len() > 512 || source.chars().any(char::is_control) {
+        return request_error(StatusCode::BAD_REQUEST, "invalid skill source");
+    }
+    let resolved = match crate::skills_search::resolve_source(source) {
+        Ok(value) => value,
+        Err(_) => return request_error(StatusCode::BAD_REQUEST, "invalid skill source"),
+    };
+    let dir = Config::home_dir().join("skills");
+    match tokio::task::spawn_blocking(move || {
+        crate::skills_search::install_to(&resolved, &dir, false)
+    })
+    .await
+    {
+        Ok(Ok(report)) => Json(serde_json::json!({"ok":true,"skill":report})).into_response(),
+        _ => request_error(StatusCode::BAD_REQUEST, "skill installation failed"),
+    }
+}
+#[derive(Debug, Deserialize)]
+struct PluginActionReq {
+    action: String,
+    id: String,
+}
+
+async fn api_studio_plugin(
+    State(st): State<AppState>,
+    Json(req): Json<PluginActionReq>,
+) -> Response {
+    let action = req.action.trim().to_ascii_lowercase();
+    if !matches!(action.as_str(), "install" | "remove") {
+        return request_error(StatusCode::BAD_REQUEST, "action must be install or remove");
+    }
+    let id = match studio::validate_identifier(&req.id, "plugin id") {
+        Ok(id) => id,
+        Err(error) => return request_error(StatusCode::BAD_REQUEST, error),
+    };
+    let g = st.inner.lock().await;
+    let cwd = g.runtime.jail.cwd.clone();
+    match crate::plugins::handle_command(&format!("{action} {id}"), &cwd) {
+        Ok(message) => Json(serde_json::json!({
+            "ok": true,
+            "action": action,
+            "id": id,
+            "message": message,
+        }))
+        .into_response(),
+        Err(_) => request_error(StatusCode::BAD_REQUEST, "plugin action failed"),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ThemeReq {
+    #[serde(default)]
+    tokens: serde_json::Value,
+    #[serde(default)]
+    text: Option<String>,
+}
+
+fn theme_payload(tokens: serde_json::Value) -> serde_json::Value {
+    let tokens = tokens
+        .as_object()
+        .into_iter()
+        .flat_map(|tokens| tokens.iter())
+        .map(|(name, value)| (format!("--{name}"), value.clone()))
+        .collect::<serde_json::Map<_, _>>();
+    serde_json::json!({"ok":true,"tokens":tokens})
+}
+
+async fn api_theme() -> Response {
+    match tokio::task::spawn_blocking(crate::theme_tokens::load_theme).await {
+        Ok(Ok(tokens)) => Json(theme_payload(tokens)).into_response(),
+        _ => request_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "theme storage unavailable",
+        ),
+    }
+}
+
+async fn api_theme_update(Json(req): Json<ThemeReq>) -> Response {
+    let tokens = match req.text {
+        Some(text) => crate::theme_tokens::parse_theme_text(&text),
+        None => crate::theme_tokens::validate_theme_json(&req.tokens),
+    };
+    let tokens = match tokens {
+        Ok(tokens) => tokens,
+        Err(_) => {
+            return request_error(
+                StatusCode::BAD_REQUEST,
+                "invalid theme tokens or unsupported CSS values",
+            )
+        }
+    };
+    let saved = tokens.clone();
+    match tokio::task::spawn_blocking(move || crate::theme_tokens::save_theme(&saved)).await {
+        Ok(Ok(())) => Json(theme_payload(tokens)).into_response(),
+        _ => request_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "theme storage unavailable",
+        ),
+    }
+}
+
 async fn api_chat_stream(
     State(st): State<AppState>,
     Json(req): Json<ChatReq>,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
     let (tx, rx) = mpsc::unbounded_channel::<AgentEvent>();
     tokio::spawn(async move {
-        let mut g = st.inner.lock().await;
-        if let Err((_, text)) = prepare_chat(&mut g, &req) {
+        let mut g = match st.inner.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                let _ = tx.send(AgentEvent {
+                    kind: "error".into(),
+                    text: "runtime busy; retry after the active turn".into(),
+                });
+                return;
+            }
+        };
+        if let Err((_, text)) = prepare_chat(&mut g, &req).await {
             let _ = tx.send(AgentEvent {
                 kind: "error".into(),
                 text,
@@ -717,7 +1255,7 @@ async fn api_chat_stream(
         let sid = g.session.id().to_string();
         let tx_ev = tx.clone();
         let ev_tx = st.events.clone();
-        let mut next = req.message.clone();
+        let mut next = chat_prompt(&req).to_string();
         let mut last_ok: Option<String> = None;
         let mut last_err: Option<String> = None;
         loop {
@@ -775,8 +1313,13 @@ async fn api_chat_stream(
 }
 
 async fn api_chat(State(st): State<AppState>, Json(req): Json<ChatReq>) -> Response {
-    let mut g = st.inner.lock().await;
-    if let Err((status, message)) = prepare_chat(&mut g, &req) {
+    let Ok(mut g) = st.inner.try_lock() else {
+        return request_error(
+            StatusCode::CONFLICT,
+            "runtime busy; retry after the active turn",
+        );
+    };
+    if let Err((status, message)) = prepare_chat(&mut g, &req).await {
         return request_error(status, message);
     }
     st.refresh_snapshot(&g, true).await;
@@ -785,8 +1328,10 @@ async fn api_chat(State(st): State<AppState>, Json(req): Json<ChatReq>) -> Respo
     let sid = session.id().to_string();
     let tx = st.events.clone();
     let result = runtime
-        .turn(session, &req.message, |ev| {
-            events.push(format!("{}: {}", ev.kind, ev.text));
+        .turn(session, chat_prompt(&req), |ev| {
+            if ev.kind != "image" {
+                events.push(format!("{}: {}", ev.kind, ev.text));
+            }
             broadcast_event(&tx, &sid, &ev);
         })
         .await;
@@ -836,8 +1381,9 @@ async fn v1_chat_completions(
         message: prompt.clone(),
         session_id: None,
         model: req.model.clone(),
+        media_ids: Vec::new(),
     };
-    if let Err((status, message)) = prepare_chat(&mut g, &chat) {
+    if let Err((status, message)) = prepare_chat(&mut g, &chat).await {
         return completion_error(status, message);
     }
     let cwd = g.runtime.jail.cwd.display().to_string();

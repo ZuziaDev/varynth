@@ -299,6 +299,14 @@ impl Runtime {
     }
 
     pub fn reconfigure(&mut self, cfg: Config) -> Result<()> {
+        self.reconfigure_with_persist(cfg, |_| Ok(()))
+    }
+
+    pub fn reconfigure_with_persist(
+        &mut self,
+        cfg: Config,
+        persist: impl FnOnce(&Config) -> Result<()>,
+    ) -> Result<()> {
         cfg.validate()?;
         cfg.require_provider_credentials()?;
         let provider = providers::build(&cfg)?;
@@ -310,6 +318,7 @@ impl Runtime {
         );
         let permission = PermissionMode::parse(&cfg.permission_mode);
         let skills = skills::discover(&jail.cwd);
+        persist(&cfg)?;
         self.provider = provider;
         self.jail = jail;
         self.permission = permission;
@@ -392,9 +401,11 @@ impl Runtime {
         let sid = session.id().to_string();
         let mut emit = on_event;
         let mut on_event = move |event: AgentEvent| {
-            if let Some(bus) = &control {
-                if let Err(error) = bus.publish(&sid, &event) {
-                    tracing::debug!(%error, "local event forwarding failed");
+            if event.kind != "image" {
+                if let Some(bus) = &control {
+                    if let Err(error) = bus.publish(&sid, &event) {
+                        tracing::debug!(%error, "local event forwarding failed");
+                    }
                 }
             }
             emit(event);
@@ -791,16 +802,28 @@ impl Runtime {
                     )
                     .await?
             };
+            providers::validate_output_images(&completion.images)?;
             self.record_usage(completion.usage);
             last_text = completion.text.clone();
+            let image_events = completion
+                .images
+                .iter()
+                .map(serde_json::to_string)
+                .collect::<serde_json::Result<Vec<_>>>()?;
             if completion.tool_calls.is_empty() {
                 session.append(ChatMessage {
                     role: "assistant".into(),
                     content: completion.text.clone(),
                     tool_call_id: None,
                     tool_calls: None,
-                    images: Vec::new(),
+                    images: completion.images.clone(),
                 })?;
+                for text in &image_events {
+                    on_event(AgentEvent {
+                        kind: "image".into(),
+                        text: text.clone(),
+                    });
+                }
                 on_event(AgentEvent {
                     kind: "assistant".into(),
                     text: completion.text.clone(),
@@ -815,8 +838,14 @@ impl Runtime {
                 content: completion.text.clone(),
                 tool_call_id: None,
                 tool_calls: Some(completion.tool_calls.clone()),
-                images: Vec::new(),
+                images: completion.images.clone(),
             })?;
+            for text in &image_events {
+                on_event(AgentEvent {
+                    kind: "image".into(),
+                    text: text.clone(),
+                });
+            }
             for call in completion.tool_calls {
                 on_event(AgentEvent {
                     kind: "tool".into(),
@@ -1605,6 +1634,7 @@ mod turn_tests {
             Completion {
                 text: text.into(),
                 tool_calls: Vec::new(),
+                images: Vec::new(),
                 model: "mock".into(),
                 usage: Some(Usage {
                     input_tokens: 10,
@@ -1622,6 +1652,7 @@ mod turn_tests {
                     name: name.into(),
                     arguments,
                 }],
+                images: Vec::new(),
                 model: "mock".into(),
                 usage: Some(Usage {
                     input_tokens: 10,
@@ -1669,6 +1700,7 @@ mod turn_tests {
             Completion {
                 text: "plain fallback reply".into(),
                 tool_calls: Vec::new(),
+                images: Vec::new(),
                 model: "mock".into(),
                 usage: None,
             }
@@ -1710,6 +1742,7 @@ mod turn_tests {
             Ok(Completion {
                 text: self.deltas.concat(),
                 tool_calls: Vec::new(),
+                images: Vec::new(),
                 model: "mock".into(),
                 usage: None,
             })

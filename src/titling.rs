@@ -76,6 +76,7 @@ mod tests {
             Ok(Completion {
                 text: self.reply.clone(),
                 tool_calls: Vec::new(),
+                images: Vec::new(),
                 model: "mock".into(),
                 usage: Some(Usage {
                     input_tokens: 10,

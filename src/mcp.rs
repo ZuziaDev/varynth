@@ -42,7 +42,7 @@ pub struct McpServer {
     pub transport: McpTransport,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpTransport {
     Http {
         url: String,

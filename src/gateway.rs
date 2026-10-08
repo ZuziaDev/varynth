@@ -392,7 +392,14 @@ async fn set_model(ctx: &GatewayCtx, model: &str) -> Result<(), String> {
         return Err("runtime busy; cannot change model during an active turn".into());
     };
     let mut cfg = g.runtime.cfg.clone();
-    cfg.model = model.to_string();
+    cfg.select_model(model).map_err(|error| error.to_string())?;
+    // Async Google OAuth preflight, same as the dashboard: a model/profile
+    // switch onto Google OAuth without a stored credential either completes
+    // the browser sign-in first or fails here, leaving the current runtime
+    // model unchanged.
+    crate::google_auth::preflight(&cfg, false)
+        .await
+        .map_err(|error| error.to_string())?;
     g.runtime
         .reconfigure(cfg)
         .map_err(|error| error.to_string())?;

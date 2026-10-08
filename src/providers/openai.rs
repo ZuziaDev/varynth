@@ -22,16 +22,16 @@ impl OpenAiProvider {
         let key = cfg
             .openai_api_key
             .clone()
-            .or_else(|| std::env::var("OPENAI_API_KEY").ok())
-            .context("OPENAI_API_KEY missing")?;
-        let base = cfg
-            .openai_base_url
-            .clone()
-            .unwrap_or_else(|| "https://api.openai.com".into())
-            .trim_end_matches('/')
-            .to_string();
+            .filter(|key| !key.trim().is_empty())
+            .context("OpenAI API key missing")?;
+        let base = super::api_v1_base(
+            cfg.openai_base_url
+                .as_deref()
+                .unwrap_or("https://api.openai.com"),
+        )?;
         Ok(Self {
             client: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
                 .timeout(std::time::Duration::from_secs(180))
                 .build()?,
             base,
@@ -84,7 +84,7 @@ impl Provider for OpenAiProvider {
         let mut msgs = vec![json!({"role":"system","content": system})];
         msgs.extend(openai_messages(messages));
         let mut body = openai_body(model, &msgs, tools, &self.effort, self.temperature);
-        let url = format!("{}/v1/chat/completions", self.base);
+        let url = format!("{}/chat/completions", self.base);
         let mut resp = send_with_retry(|| self.chat_request(&url, &body)).await?;
         if needs_param_degrade(resp.status, &resp.body, "reasoning_effort")
             && body.get("reasoning_effort").is_some()
@@ -109,13 +109,15 @@ impl Provider for OpenAiProvider {
             .get("tool_calls")
             .map(|t| parse_openai_tool_calls(t))
             .unwrap_or_default();
+        let (text, images) = super::parse_openai_message(&message)?;
+        anyhow::ensure!(
+            !text.trim().is_empty() || !images.is_empty() || !tool_calls.is_empty(),
+            "OpenAI returned an empty completion"
+        );
         Ok(Completion {
             usage: usage_from_openai(&v),
-            text: message
-                .get("content")
-                .and_then(|c| c.as_str())
-                .unwrap_or("")
-                .to_string(),
+            text,
+            images,
             tool_calls,
             model: v
                 .get("model")
@@ -137,35 +139,20 @@ impl Provider for OpenAiProvider {
         msgs.extend(openai_messages(messages));
         let mut body = openai_body(model, &msgs, tools, &self.effort, self.temperature);
         body["stream"] = json!(true);
-        let url = format!("{}/v1/chat/completions", self.base);
+        let url = format!("{}/chat/completions", self.base);
         let resp = send_streaming_with_retry(|| self.chat_request(&url, &body)).await?;
         let resp = ensure_sse_response(resp, "openai").await?;
         read_openai_stream(resp, on_delta, model).await
     }
 
     async fn list_models(&self) -> Result<Vec<CatalogModel>> {
-        let url = format!("{}/v1/models", self.base);
+        let url = format!("{}/models", self.base);
         let resp = send_with_retry(|| self.client.get(&url).bearer_auth(&self.key)).await?;
         if !resp.is_success() {
-            anyhow::bail!("openai {}: {}", resp.status, truncate(&resp.body, 800));
+            anyhow::bail!("openai model catalog HTTP {}", resp.status);
         }
-        let v: Value = serde_json::from_str(&resp.body)?;
-        let mut out = Vec::new();
-        if let Some(arr) = v.get("data").and_then(|d| d.as_array()) {
-            for m in arr {
-                if let Some(id) = m.get("id").and_then(|x| x.as_str()) {
-                    out.push(CatalogModel {
-                        id: id.to_string(),
-                        display_name: None,
-                        owned_by: m
-                            .get("owned_by")
-                            .and_then(|x| x.as_str())
-                            .map(|s| s.to_string()),
-                    });
-                }
-            }
-        }
-        Ok(out)
+        let v: Value = serde_json::from_str(&resp.body).context("invalid model catalog JSON")?;
+        super::parse_models_catalog(&v)
     }
 }
 

@@ -134,7 +134,7 @@ OpenAI-compatible endpoint:
 
 ```toml
 model = "your-model-id"
-provider = "openai"                 # openai | anthropic | proxy
+provider = "openai"                 # openai | anthropic | proxy | google | google-vertex, or a profile id
 openai_base_url = "https://api.example.com"   # no trailing /v1
 openai_api_key = ""                 # or OPENAI_API_KEY
 
@@ -158,11 +158,35 @@ In `prompt` mode the TUI pops an allow dialog for every gated write and shell ca
 
 `docker-isolated` runs shell commands inside Docker with the workspace mounted at `/work` and network disabled by default. File tools still access the host workspace through the jail; configured MCP servers are external processes/services, not automatically containerized. `workspace-write` is a file boundary plus shell policy, not an operating-system process sandbox. Use Docker or a disposable virtual machine for untrusted commands.
 
-Use `varynth keyring set <field>` to store a hidden-input secret. Supported fields are `proxy-token`, `openai-api-key`, `anthropic-api-key`, `telegram-bot-token` and `dashboard-token`. When `use_keyring = true`, these fields are omitted from saved TOML. `varynth keyring status` reports presence without printing values.
+Use `varynth keyring set <field>` to store a hidden-input secret. Supported fields are `proxy-token`, `openai-api-key`, `anthropic-api-key`, `google-api-key`, `telegram-bot-token` and `dashboard-token`. When `use_keyring = true`, these fields are omitted from saved TOML. `varynth keyring status` reports presence without printing values.
 
 Values outside these lists stop startup with an error instead of silently falling back. `effort` maps to real provider parameters: Anthropic gets extended thinking with a budget scaled by level, OpenAI-compatible endpoints get `reasoning_effort`. HTTP 429/5xx provider responses are retried with backoff (Retry-After is honored).
 
 Anthropic uses `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`. A local proxy uses `proxy_url` (for example `http://127.0.0.1:8787`) and `proxy_token`, or `VARYNTH_PROXY_URL` and `VARYNTH_PROXY_TOKEN`. `doctor --fix` starts `varynth-proxy` from PATH when the configured `proxy_url` is a loopback address. It does not download one.
+
+### Google Gemini and Vertex AI
+
+The `google` and `google-vertex` providers use the official Google APIs: `generativelanguage.googleapis.com` for Gemini and `aiplatform.googleapis.com` for Vertex. Nothing else is contacted.
+
+API-key mode (Gemini only): set `provider = "google"` plus `google_api_key` or the `GOOGLE_API_KEY`/`GEMINI_API_KEY` environment variable.
+
+OAuth mode (Gemini or Vertex): sign in once, then set `google_auth = "oauth"`:
+
+```powershell
+varynth google login --client-id <installed-app-client-id>
+varynth google status
+varynth google logout
+```
+
+`login` runs the documented authorization-code flow with PKCE against `accounts.google.com`, receives the redirect on a loopback port, and stores the refresh token in the OS keyring — never in config, logs, or printed output. Vertex also needs `google_project` and `google_location`.
+
+Automatic sign-in: when `google_auth = "oauth"` (directly or through a profile) is selected without a stored credential, model-using commands open the browser login automatically before the first request, as long as a non-secret OAuth client id is configured. Set `google_client_id` in config.toml (or `VARYNTH_GOOGLE_CLIENT_ID`) to your installed-app client id. `google_auto_login = true` is the default; set it to `false` to require an explicit `varynth google login`. When sign-in cannot start — no client id, or auto-login disabled — the command stops with an error naming the fix instead of asking for a token. The dashboard and the WebSocket gateway run the same check before applying a profile/model change; a failed sign-in leaves the active runtime unchanged.
+
+### Provider profiles
+
+`[[provider_profiles]]` entries add named endpoints beyond the built-in providers. Select one with `provider = "<id>"` or by a model id prefixed `<id>/` (for example `antigravity/gemini-2.5-pro`); `varynth models` lists qualified ids from every enabled profile. Each profile has its own `kind`, `base_url`, credentials (`api_key`, `api_key_env`, or a keyring slot), and an optional pinned `models` list used when the live catalog is unreachable.
+
+Antigravity-style gateways are supported only this way: as a user-supplied OpenAI-compatible `base_url`. No internal or undocumented Antigravity API, account rotation, or device fingerprint spoofing is implemented.
 
 Other environment overrides: `VARYNTH_MODEL`, `VARYNTH_PROVIDER`, `VARYNTH_DASHBOARD_TOKEN`, `VARYNTH_MCP_CONFIG`.
 

@@ -161,7 +161,55 @@ h1, h2, h3, p { margin: 0; }
 .composer-status { margin-left: auto; font-size: 11px; color: var(--quiet); white-space: nowrap; }
 .send { min-height: 30px; height: 30px; padding: 4px 10px; flex-shrink: 0; }
 .send .icon { width: 15px; height: 15px; flex-basis: 15px; }
-.inspector { grid-area: inspector; min-height: 0; min-width: 0; overflow-y: auto; background: var(--rail); border-left: 1px solid var(--line); }
+.composer-field.dragging { border-color: var(--accent); background: var(--accent-surface); }
+.attachment-picker { color: var(--accent-light); }
+.attachment-chips { display: flex; gap: 7px; flex-wrap: wrap; padding: 0 10px 9px; }
+.attachment-chip { min-width: 0; max-width: 230px; display: flex; align-items: center; gap: 7px; padding: 4px 5px; border: 1px solid var(--line); border-radius: 4px; background: var(--raised); color: var(--muted); font-size: 11px; }
+.attachment-chip.has-error { color: var(--red); border-color: #67404a; }
+.attachment-chip > img { width: 30px; height: 30px; object-fit: cover; border-radius: 3px; background: var(--bg); flex: 0 0 30px; }
+.attachment-chip .attachment-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-chip .attachment-state { color: var(--amber); white-space: nowrap; }
+.attachment-chip .icon-button { width: 22px; height: 22px; flex-basis: 22px; padding: 4px; margin-left: auto; }
+.message-images { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.message-images img { display: block; width: min(220px, 100%); height: 150px; object-fit: cover; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+.studio-panel { padding: 0 24px 28px; overflow: auto; }
+.studio-toolbar { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 12px; padding: 19px 0 16px; background: var(--bg); border-bottom: 1px solid var(--line-soft); }
+.studio-toolbar h2 { font-size: 16px; font-weight: 600; }
+.studio-toolbar p { margin-top: 5px; color: var(--quiet); font-size: 11px; }
+.studio-toolbar .icon-button { margin-left: auto; }
+.studio-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; padding-top: 16px; max-width: 1080px; }
+.studio-section { min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+.studio-section .section-heading { align-items: flex-start; }
+.studio-section .section-heading h3 { font-size: 13px; }
+.studio-section .data-list { margin-top: 14px; }
+.studio-list { display: grid; gap: 8px; }
+.studio-row { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 10px 0; border-bottom: 1px solid var(--line-soft); }
+.studio-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.studio-row-detail { min-width: 0; display: grid; gap: 4px; flex: 1; }
+.studio-row-detail strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; font-weight: 550; }
+.studio-row-detail span { overflow-wrap: anywhere; color: var(--quiet); font-size: 11px; line-height: 1.45; }
+.studio-row-action { min-height: 28px; padding: 5px 9px; flex: 0 0 auto; }
+.studio-chip-list { display: flex; flex-wrap: wrap; gap: 7px; }
+.studio-chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 5px 7px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); font: 11px var(--mono); }
+.section-note { margin-top: 5px; color: var(--quiet); font-size: 11px; font-weight: 400; }
+.theme-section { grid-column: 1 / -1; }
+.theme-input { width: 100%; min-height: 150px; resize: vertical; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 11px; font: 12px/1.6 var(--mono); }
+.theme-input:focus { border-color: var(--accent); outline: none; }
+.theme-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.theme-actions .icon-button { margin-left: auto; border: 1px solid var(--line); }
+.tweakcn-link { display: inline-flex; align-items: center; gap: 6px; margin-top: 15px; color: var(--accent-light); font-size: 11px; }
+.tweakcn-link:hover { color: var(--ink); }
+.studio-form { display: grid; gap: 9px; margin-top: 15px; padding-top: 13px; border-top: 1px solid var(--line-soft); }
+.studio-form label { display: grid; gap: 5px; color: var(--quiet); font-size: 11px; }
+.studio-form input, .studio-form select, .studio-form textarea { width: 100%; min-width: 0; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 7px 8px; font-size: 11px; }
+.studio-form textarea { resize: vertical; line-height: 1.45; }
+.studio-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.studio-form-grid-compact { grid-template-columns: minmax(90px, .7fr) minmax(0, 1.3fr); }
+.studio-form .button { justify-self: start; min-height: 29px; }
+.form-error { margin: 0; }
+.theme-file-label { cursor: pointer; }
+.attachment-picker.disabled { pointer-events: none; opacity: .5; }
+
 .inspector-heading { padding: 14px 18px; height: 58px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line-soft); }
 .inspector-section { padding: 18px; border-bottom: 1px solid var(--line-soft); }
 .inspector-section h3 { font-size: 12px; font-weight: 550; color: var(--ink); }
@@ -236,8 +284,8 @@ dialog .inline-error { margin: 12px 0 0; }
   .workspace-controls { gap: 0; }
   .workspace-controls .runtime-state { display: none; }
   .workspace-controls .icon-button { width: 30px; flex-basis: 30px; }
-  .workspace-tabs { padding: 0 16px; gap: 17px; }
-  .tab { gap: 6px; font-size: 11px; }
+  .workspace-tabs { padding: 0 16px; gap: 14px; overflow-x: auto; }
+  .tab { gap: 6px; font-size: 11px; flex: 0 0 auto; }
   .tab .icon { width: 14px; height: 14px; flex-basis: 14px; }
   .conversation { padding: 22px 16px; }
   .message { grid-template-columns: 23px minmax(0,1fr); column-gap: 9px; margin-bottom: 24px; }
@@ -247,6 +295,13 @@ dialog .inline-error { margin: 12px 0 0; }
   .composer-model select { max-width: 175px; }
   .composer-status { display: none; }
   .composer-toolbar .send { margin-left: auto; }
+  .attachment-chip { max-width: 180px; }
+  .studio-panel { padding: 0 16px 22px; }
+  .studio-grid { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .theme-section { grid-column: auto; }
+  .studio-section { padding: 13px; }
+  .studio-form-grid, .studio-form-grid-compact { grid-template-columns: minmax(0, 1fr); }
+  .theme-actions .icon-button { margin-left: 0; }
   .panel-toolbar { padding: 12px 16px; }
   .event-feed { padding: 10px 16px; }
   .event-row { grid-template-columns: 45px 68px minmax(0,1fr); gap: 8px; }

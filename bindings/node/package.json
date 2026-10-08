@@ -1,6 +1,6 @@
 {
   "name": "@varynth/node",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Node.js and TypeScript API for the Varynth agent",
   "type": "module",
   "engines": {

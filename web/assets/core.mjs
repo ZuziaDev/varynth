@@ -22,7 +22,13 @@ export class SseDecoder {
       try {
         const payload = JSON.parse(raw);
         if (typeof payload === 'object' && payload !== null) {
-          frames.push({ kind: payload.kind || kind, text: String(payload.text ?? '') });
+          const frameKind = payload.kind || kind;
+          const text = payload.text != null
+            ? String(payload.text)
+            : frameKind === 'image' && payload.media_type && payload.data
+              ? JSON.stringify({ media_type: payload.media_type, data: payload.data })
+              : '';
+          frames.push({ kind: frameKind, text });
         } else {
           frames.push({ kind, text: String(payload) });
         }
@@ -160,4 +166,211 @@ export function parseContext(text) {
     throw new Error('Context is limited to 512 KiB.');
   }
   return normalized;
+}
+export const THEME_TOKENS = Object.freeze([
+  '--bg', '--rail', '--panel', '--raised', '--line', '--line-soft',
+  '--ink', '--muted', '--quiet', '--accent', '--accent-light',
+  '--accent-surface', '--green', '--amber', '--red', '--cyan', '--radius',
+]);
+
+export const THEME_ALIASES = Object.freeze({
+  background: '--bg',
+  foreground: '--ink',
+  card: '--panel',
+  'card-foreground': '--ink',
+  popover: '--panel',
+  'popover-foreground': '--ink',
+  primary: '--accent',
+  'primary-foreground': '--ink',
+  secondary: '--raised',
+  'secondary-foreground': '--ink',
+  muted: '--line-soft',
+  'muted-foreground': '--muted',
+  accent: '--accent-surface',
+  'accent-foreground': '--ink',
+  destructive: '--red',
+  'destructive-foreground': '--ink',
+  border: '--line',
+  input: '--line',
+  ring: '--accent',
+  sidebar: '--rail',
+  'sidebar-foreground': '--ink',
+  'sidebar-primary': '--accent',
+  'sidebar-primary-foreground': '--ink',
+  'sidebar-accent': '--accent-surface',
+  'sidebar-accent-foreground': '--ink',
+  'sidebar-border': '--line',
+  'sidebar-ring': '--accent',
+  radius: '--radius',
+});
+
+const THEME_TOKEN_SET = new Set(THEME_TOKENS);
+const HEX_COLOR = /^#[0-9a-f]{3,4}$|^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i;
+const BARE_HSL = /^[-+]?(?:\d*\.)?\d+(?:\s+[-+]?(?:\d*\.)?\d+%?){2}(?:\s*\/\s*[-+]?(?:\d*\.)?\d+%?)?$/;
+const COLOR_FUNCTION = /^(?:rgb|rgba|hsl|hsla|oklch|oklab|lab|lch|color)\(\s*[a-z0-9.%+\-/,\s]+\)$/i;
+const RADIUS_VALUE = /^(?:0|(?:0|[1-9]\d?)px|(?:0|[01](?:\.\d+)?)rem)$/;
+const MEDIA_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const RASTER_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+
+export function rasterMediaType(value) {
+  const type = String(value || '').split(';', 1)[0].trim().toLowerCase();
+  return RASTER_TYPES.has(type) ? type : '';
+}
+
+export function rasterDataUrl(mediaType, data) {
+  const type = rasterMediaType(mediaType);
+  const encoded = String(data || '').trim();
+  if (!type || !encoded || !/^[a-z0-9+/=\s]+$/i.test(encoded)) return '';
+  return `data:${type};base64,${encoded}`;
+}
+
+export function mediaPath(id) {
+  const value = String(id || '').trim();
+  return MEDIA_UUID.test(value) ? `/api/media/${value}` : '';
+}
+
+function themeTarget(name) {
+  const raw = String(name || '').trim().toLowerCase();
+  if (raw.startsWith('--')) {
+    if (THEME_TOKEN_SET.has(raw)) return raw;
+    return THEME_ALIASES[raw.slice(2)] || '';
+  }
+  return THEME_ALIASES[raw] || (THEME_TOKEN_SET.has(`--${raw}`) && raw !== 'accent' ? `--${raw}` : '');
+}
+
+function normalizeThemeValue(token, value) {
+  const text = String(value ?? '').trim();
+  if (!text || text.length > 160 || /[{};`\n\r<>"']/.test(text) || /\b(?:url|var|env|image|attr)\s*\(/i.test(text)) return '';
+  if (token === '--radius') return RADIUS_VALUE.test(text) ? text : '';
+  if (HEX_COLOR.test(text) || COLOR_FUNCTION.test(text)) return text;
+  return BARE_HSL.test(text) ? `hsl(${text})` : '';
+}
+
+export function validateThemeTokens(tokens) {
+  if (!tokens || typeof tokens !== 'object' || Array.isArray(tokens)) {
+    throw new Error('Theme tokens must be an object.');
+  }
+  const normalized = {};
+  for (const [rawName, rawValue] of Object.entries(tokens)) {
+    const name = themeTarget(rawName);
+    if (!name) continue;
+    const value = normalizeThemeValue(name, rawValue);
+    if (!value) throw new Error(`Invalid value for theme token ${rawName}.`);
+    normalized[name] = value;
+  }
+  if (!Object.keys(normalized).length) throw new Error('Add at least one allowed theme token.');
+  return normalized;
+}
+
+function parseDeclarations(source) {
+  const tokens = {};
+  for (const declaration of String(source || '').split(';')) {
+    const part = declaration.trim();
+    if (!part) continue;
+    const match = part.match(/^([a-zA-Z][a-zA-Z0-9_-]*|--[a-zA-Z0-9_-]+)\s*:\s*(.*?)\s*$/);
+    if (!match) throw new Error('CSS input contains an invalid custom-property declaration.');
+    tokens[match[1]] = match[2];
+  }
+  return tokens;
+}
+
+function parseCssThemeTokens(text) {
+  const source = String(text || '').trim();
+  if (!source || source.includes('/*') || source.includes('*/') || /[<>]/.test(source)) {
+    throw new Error('CSS input must contain only allowed theme tokens.');
+  }
+  const tokens = {};
+  const blocks = /(?:^|\s*)(:root|\.dark)\s*\{([^{}]*)\}/gi;
+  let match;
+  let cursor = 0;
+  let found = false;
+  while ((match = blocks.exec(source))) {
+    if (source.slice(cursor, match.index).trim()) throw new Error('CSS input contains an unsupported selector.');
+    Object.assign(tokens, parseDeclarations(match[2]));
+    cursor = blocks.lastIndex;
+    found = true;
+  }
+  if (found) {
+    if (source.slice(cursor).trim()) throw new Error('CSS input contains content outside :root or .dark.');
+    return tokens;
+  }
+  return parseDeclarations(source);
+}
+
+export function parseThemeInput(text) {
+  const source = String(text || '').trim();
+  if (!source) throw new Error('Enter theme JSON or CSS custom properties.');
+  let tokens;
+  if (source.startsWith('{')) {
+    try { tokens = JSON.parse(source); }
+    catch { throw new Error('Theme JSON is invalid.'); }
+  } else {
+    tokens = parseCssThemeTokens(source);
+  }
+  return validateThemeTokens(tokens);
+}
+
+export function safeImageSource(value) {
+  const source = String(value || '').trim();
+  if (/^data:image\/(?:png|jpe?g|webp|gif);base64,[a-z0-9+/=\s]+$/i.test(source)) return source;
+  if (/^blob:[^\s<>"']+$/i.test(source)) return source;
+  if (/^\/api\/media\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(source)) return source;
+  return '';
+}
+
+function imageSourceFromValue(value) {
+  if (typeof value === 'string') return mediaPath(value) || safeImageSource(value);
+  if (!value || typeof value !== 'object') return '';
+  for (const key of ['id', 'media_id', 'mediaId', 'uuid']) {
+    const source = mediaPath(value[key]);
+    if (source) return source;
+  }
+  for (const key of ['url', 'src', 'image_url', 'imageUrl', 'data_url', 'dataUrl']) {
+    if (typeof value[key] === 'string') {
+      const source = safeImageSource(value[key]);
+      if (source) return source;
+    }
+  }
+  if (typeof value.data === 'string' && typeof value.media_type === 'string') {
+    return rasterDataUrl(value.media_type, value.data);
+  }
+  return '';
+}
+
+export function messageImageSources(message) {
+  if (!message || typeof message !== 'object' || !['user', 'assistant'].includes(message.role)) return [];
+  const sources = [];
+  const add = (value) => {
+    if (Array.isArray(value)) value.forEach(add);
+    else {
+      const source = imageSourceFromValue(value);
+      if (source && !sources.includes(source)) sources.push(source);
+    }
+  };
+  for (const value of [
+    message.images, message.image_urls, message.media, message.attachments,
+    message.media_ids, message.metadata?.images, message.metadata?.image_urls,
+    message.metadata?.media, message.metadata?.attachments, message.metadata?.media_ids,
+  ]) add(value);
+  return sources.slice(0, 8);
+}
+
+export function parseImageEvent(text) {
+  try {
+    const value = JSON.parse(String(text || ''));
+    return rasterDataUrl(value?.media_type, value?.data);
+  } catch {
+    return '';
+  }
+}
+
+export function validateSkillSource(source) {
+  const value = String(source || '').trim();
+  if (!value || value.length > 128 * 1024 || /[\u0000\u0001-\u0008\u000b\u000c\u000e-\u001f]/.test(value)) {
+    throw new Error('Paste a valid SKILL.md or GitHub reference.');
+  }
+  const github = /^(?:https?:\/\/)?(?:www\.)?github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\/tree\/[^\s]+)?(?:#[^\s]+)?$/i;
+  const skill = /(^---\s*$|^name\s*:\s*\S+|^description\s*:\s*\S+)/im.test(value) && value.length >= 40;
+  if (!github.test(value) && !skill) throw new Error('Paste a valid SKILL.md or GitHub reference.');
+  return value;
 }
