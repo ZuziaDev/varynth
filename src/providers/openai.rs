@@ -4,8 +4,9 @@ use serde_json::{json, Value};
 use crate::config::Config;
 use crate::providers::{
     ensure_sse_response, first_choice, needs_param_degrade, openai_messages,
-    parse_openai_tool_calls, read_openai_stream, reasoning_effort, send_streaming_with_retry,
-    send_with_retry, truncate, usage_from_openai, CatalogModel, Completion, Provider,
+    parse_openai_tool_calls, provider_http_error, read_openai_stream, reasoning_effort,
+    send_streaming_with_retry, send_with_retry, usage_from_openai, CatalogModel, Completion,
+    Provider,
 };
 use crate::session::ChatMessage;
 
@@ -81,6 +82,7 @@ impl Provider for OpenAiProvider {
         messages: &[ChatMessage],
         tools: &[Value],
     ) -> Result<Completion> {
+        super::validate_request_ids(model, messages)?;
         let mut msgs = vec![json!({"role":"system","content": system})];
         msgs.extend(openai_messages(messages));
         let mut body = openai_body(model, &msgs, tools, &self.effort, self.temperature);
@@ -95,15 +97,12 @@ impl Provider for OpenAiProvider {
             resp = send_with_retry(|| self.chat_request(&url, &body)).await?;
         }
         if !resp.is_success() {
-            anyhow::bail!("openai {}: {}", resp.status, truncate(&resp.body, 2000));
+            return Err(provider_http_error("OpenAI", resp.status));
         }
-        let v: Value = serde_json::from_str(&resp.body)?;
-        let choice = first_choice(&v).ok_or_else(|| {
-            anyhow::anyhow!(
-                "openai: malformed response (missing/empty choices): {}",
-                truncate(&resp.body, 500)
-            )
-        })?;
+        let v: Value = serde_json::from_str(&resp.body)
+            .map_err(|_| anyhow::anyhow!("OpenAI returned invalid JSON"))?;
+        let choice = first_choice(&v)
+            .ok_or_else(|| anyhow::anyhow!("OpenAI returned a malformed completion"))?;
         let message = choice.get("message").cloned().unwrap_or(Value::Null);
         let tool_calls = message
             .get("tool_calls")
@@ -135,6 +134,7 @@ impl Provider for OpenAiProvider {
         tools: &[Value],
         on_delta: &mut (dyn for<'a> FnMut(&'a str) + Send),
     ) -> Result<Completion> {
+        super::validate_request_ids(model, messages)?;
         let mut msgs = vec![json!({"role":"system","content": system})];
         msgs.extend(openai_messages(messages));
         let mut body = openai_body(model, &msgs, tools, &self.effort, self.temperature);
@@ -149,9 +149,10 @@ impl Provider for OpenAiProvider {
         let url = format!("{}/models", self.base);
         let resp = send_with_retry(|| self.client.get(&url).bearer_auth(&self.key)).await?;
         if !resp.is_success() {
-            anyhow::bail!("openai model catalog HTTP {}", resp.status);
+            return Err(provider_http_error("OpenAI", resp.status));
         }
-        let v: Value = serde_json::from_str(&resp.body).context("invalid model catalog JSON")?;
+        let v: Value = serde_json::from_str(&resp.body)
+            .map_err(|_| anyhow::anyhow!("OpenAI returned invalid model catalog JSON"))?;
         super::parse_models_catalog(&v)
     }
 }

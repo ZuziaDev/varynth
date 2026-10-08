@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[path = "provider_registry.rs"]
+pub mod provider_registry;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -573,6 +576,12 @@ impl Config {
         Self::home_dir().join("config.toml")
     }
 
+    /// Optional OpenCode-like provider registry. JSON is loaded first and
+    /// translated into `provider_profiles`; config.toml remains the fallback.
+    pub fn provider_registry_path() -> PathBuf {
+        Self::home_dir().join("config.json")
+    }
+
     pub fn sessions_dir() -> PathBuf {
         Self::home_dir().join("sessions")
     }
@@ -587,15 +596,20 @@ impl Config {
 
     pub fn load() -> Result<Self> {
         let path = Self::config_path();
-        if !path.exists() {
-            let cfg = Self::default().with_env();
-            cfg.validate()?;
-            return Ok(cfg);
+        let mut cfg = if !path.exists() {
+            Self::default()
+        } else {
+            let raw =
+                fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+            toml::from_str(&raw).context("parse config.toml")?
+        };
+        if let Some(registry) =
+            provider_registry::ProviderRegistry::load_optional(&Self::provider_registry_path())?
+        {
+            cfg.provider_profiles = registry.merge_profiles(&cfg.provider_profiles)?;
         }
-        let raw = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-        let mut cfg: Config = toml::from_str(&raw).context("parse config.toml")?;
         cfg.apply_env();
-        cfg.validate().context("invalid config.toml")?;
+        cfg.validate().context("invalid configuration")?;
         Ok(cfg)
     }
 
@@ -606,6 +620,14 @@ impl Config {
         fs::create_dir_all(Self::sessions_dir())?;
         let raw = toml::to_string_pretty(&self.redacted_for_save())?;
         crate::control_bus::atomic_write(&Self::config_path(), raw.as_bytes())?;
+
+        let registry_path = Self::provider_registry_path();
+        if !self.provider_profiles.is_empty() {
+            let mut registry = provider_registry::ProviderRegistry::load_optional(&registry_path)?
+                .unwrap_or_default();
+            registry.replace_profiles(&self.provider_profiles, self.use_keyring == Some(true))?;
+            registry.save(&registry_path)?;
+        }
         Ok(())
     }
 

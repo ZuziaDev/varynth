@@ -978,6 +978,47 @@ struct ConfigFileLock {
     path: PathBuf,
 }
 
+/// A private snapshot used by Studio to roll back an MCP JSON mutation when
+/// the runtime/config transaction cannot be committed. It never exposes the
+/// file bytes to callers.
+pub struct ConfigSnapshot {
+    path: PathBuf,
+    previous: Option<Vec<u8>>,
+}
+
+pub fn snapshot_config(path: &Path) -> Result<ConfigSnapshot> {
+    let path = resolved_config_path(path);
+    let previous = match fs::symlink_metadata(&path) {
+        Ok(metadata) => {
+            anyhow::ensure!(
+                !metadata.file_type().is_symlink() && metadata.is_file(),
+                "MCP config must be a regular file"
+            );
+            anyhow::ensure!(metadata.len() <= 512 * 1024, "MCP config is too large");
+            Some(fs::read(&path).with_context(|| format!("read {}", path.display()))?)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    Ok(ConfigSnapshot { path, previous })
+}
+
+impl ConfigSnapshot {
+    /// Restore the exact pre-mutation file state using the same lock and
+    /// atomic replacement rules as normal MCP config writes.
+    pub fn restore(self) -> Result<()> {
+        let _lock = ConfigFileLock::acquire(&self.path)?;
+        match self.previous {
+            Some(bytes) => save_config_bytes(&self.path, &bytes),
+            None => match fs::remove_file(&self.path) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error.into()),
+            },
+        }
+    }
+}
+
 impl ConfigFileLock {
     fn acquire(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
@@ -1049,7 +1090,7 @@ fn load_config_value(path: &Path) -> Result<Value> {
     Ok(value)
 }
 
-fn save_config_value(path: &Path, value: &Value) -> Result<()> {
+fn save_config_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -1060,9 +1101,14 @@ fn save_config_value(path: &Path, value: &Value) -> Result<()> {
             .unwrap_or("mcp.json"),
         std::process::id()
     ));
-    fs::write(&tmp, serde_json::to_vec_pretty(value)?)?;
+    fs::write(&tmp, bytes)?;
     fs::rename(&tmp, path).with_context(|| format!("replace {}", path.display()))?;
     Ok(())
+}
+
+fn save_config_value(path: &Path, value: &Value) -> Result<()> {
+    let bytes = serde_json::to_vec_pretty(value)?;
+    save_config_bytes(path, &bytes)
 }
 
 /// Add or replace one MCP server entry while preserving every unknown field in
@@ -1215,7 +1261,38 @@ impl McpManager {
         statuses
     }
 
-    /// Explicitly initialize and list one server, updating its cached status.
+    /// Preserve already-probed clients when a registry reload leaves their
+    /// transport unchanged. New or changed entries stay lazy and unprobed.
+    pub fn inherit_unchanged(&mut self, previous: &mut Self) {
+        let names: Vec<String> = self.servers.keys().cloned().collect();
+        for name in names {
+            let unchanged = self.servers.get(&name).is_some_and(|next| {
+                previous
+                    .servers
+                    .get(&name)
+                    .is_some_and(|old| old.server.transport == next.server.transport)
+            });
+            if !unchanged {
+                continue;
+            }
+            if let Some(client) = previous.servers.remove(&name) {
+                self.servers.insert(name.clone(), client);
+            }
+            if let Some(status) = previous.statuses.remove(&name) {
+                self.statuses.insert(name, status);
+            }
+        }
+    }
+
+    /// Explicitly probe one server and refresh its tool schemas. Registry
+    /// loading itself remains side-effect free; callers opt into this method
+    /// when they want a server initialized and its tools made available.
+    pub fn probe_server_with_tools(&mut self, name: &str) -> Result<McpServerStatus> {
+        let status = self.probe_server(name)?;
+        let _ = self.load_tools();
+        Ok(status)
+    }
+
     pub fn probe_server(&mut self, name: &str) -> Result<McpServerStatus> {
         let client = self
             .servers

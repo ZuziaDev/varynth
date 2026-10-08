@@ -1,11 +1,12 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::{json, Value};
 
 use crate::config::Config;
 use crate::providers::{
-    ensure_sse_response, first_choice, needs_param_degrade, openai_messages,
-    parse_openai_tool_calls, read_openai_stream, reasoning_effort, send_streaming_with_retry,
-    send_with_retry, truncate, usage_from_openai, CatalogModel, Completion, Provider,
+    api_v1_base, ensure_sse_response, first_choice, needs_param_degrade, openai_messages,
+    parse_openai_tool_calls, provider_http_error, read_openai_stream, reasoning_effort,
+    send_streaming_with_retry, send_with_retry, usage_from_openai, CatalogModel, Completion,
+    Provider,
 };
 use crate::session::ChatMessage;
 
@@ -22,9 +23,10 @@ impl ProxyProvider {
     pub fn new(cfg: &Config) -> Result<Self> {
         Ok(Self {
             client: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
                 .timeout(std::time::Duration::from_secs(180))
                 .build()?,
-            base: cfg.proxy_url.trim_end_matches('/').to_string(),
+            base: api_v1_base(&cfg.proxy_url)?,
             token: cfg.proxy_token.clone(),
             effort: cfg.effort.trim().to_lowercase(),
             max_tokens: cfg.max_tokens,
@@ -87,6 +89,7 @@ impl Provider for ProxyProvider {
         messages: &[ChatMessage],
         tools: &[Value],
     ) -> Result<Completion> {
+        super::validate_request_ids(model, messages)?;
         let mut msgs = vec![json!({"role":"system","content": system})];
         msgs.extend(openai_messages(messages));
         let mut body = proxy_body(
@@ -97,10 +100,8 @@ impl Provider for ProxyProvider {
             self.max_tokens,
             self.temperature,
         );
-        let url = format!("{}/v1/chat/completions", self.base);
-        let mut resp = send_with_retry(|| self.chat_request(&url, &body))
-            .await
-            .with_context(|| format!("POST {url}"))?;
+        let url = format!("{}/chat/completions", self.base);
+        let mut resp = send_with_retry(|| self.chat_request(&url, &body)).await?;
         if needs_param_degrade(resp.status, &resp.body, "reasoning_effort")
             && body.get("reasoning_effort").is_some()
         {
@@ -110,15 +111,12 @@ impl Provider for ProxyProvider {
             resp = send_with_retry(|| self.chat_request(&url, &body)).await?;
         }
         if !resp.is_success() {
-            anyhow::bail!("proxy {}: {}", resp.status, truncate(&resp.body, 2000));
+            return Err(provider_http_error("proxy", resp.status));
         }
-        let v: Value = serde_json::from_str(&resp.body).context("proxy json")?;
-        let choice = first_choice(&v).ok_or_else(|| {
-            anyhow::anyhow!(
-                "proxy: malformed response (missing/empty choices): {}",
-                truncate(&resp.body, 500)
-            )
-        })?;
+        let v: Value = serde_json::from_str(&resp.body)
+            .map_err(|_| anyhow::anyhow!("proxy returned invalid JSON"))?;
+        let choice = first_choice(&v)
+            .ok_or_else(|| anyhow::anyhow!("proxy returned a malformed completion"))?;
         let message = choice.get("message").cloned().unwrap_or(Value::Null);
         let (content, images) = super::parse_openai_message(&message)?;
         let tool_calls = message
@@ -150,6 +148,7 @@ impl Provider for ProxyProvider {
         tools: &[Value],
         on_delta: &mut (dyn for<'a> FnMut(&'a str) + Send),
     ) -> Result<Completion> {
+        super::validate_request_ids(model, messages)?;
         let mut msgs = vec![json!({"role":"system","content": system})];
         msgs.extend(openai_messages(messages));
         let mut body = proxy_body(
@@ -161,48 +160,28 @@ impl Provider for ProxyProvider {
             self.temperature,
         );
         body["stream"] = json!(true);
-        let url = format!("{}/v1/chat/completions", self.base);
+        let url = format!("{}/chat/completions", self.base);
         let resp = send_streaming_with_retry(|| self.chat_request(&url, &body)).await?;
         let resp = ensure_sse_response(resp, "proxy").await?;
         read_openai_stream(resp, on_delta, model).await
     }
 
     async fn list_models(&self) -> Result<Vec<CatalogModel>> {
-        let url = format!("{}/v1/models", self.base);
+        let url = format!("{}/models", self.base);
         let resp = send_with_retry(|| self.auth(self.client.get(&url))).await?;
         if !resp.is_success() {
-            anyhow::bail!(
-                "proxy models {}: {}",
-                resp.status,
-                truncate(&resp.body, 800)
-            );
+            return Err(provider_http_error("proxy", resp.status));
         }
-        let v: Value = serde_json::from_str(&resp.body)?;
-        let mut out = Vec::new();
-        if let Some(arr) = v.get("data").and_then(|d| d.as_array()) {
-            for m in arr {
-                if let Some(id) = m.get("id").and_then(|x| x.as_str()) {
-                    out.push(CatalogModel {
-                        id: id.to_string(),
-                        display_name: m
-                            .get("display_name")
-                            .and_then(|x| x.as_str())
-                            .map(|s| s.to_string()),
-                        owned_by: m
-                            .get("owned_by")
-                            .and_then(|x| x.as_str())
-                            .map(|s| s.to_string()),
-                    });
-                }
-            }
-        }
-        Ok(out)
+        let v: Value = serde_json::from_str(&resp.body)
+            .map_err(|_| anyhow::anyhow!("proxy returned invalid model catalog JSON"))?;
+        super::parse_models_catalog(&v)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::truncate;
 
     #[test]
     fn proxy_body_defaults_temperature_and_honors_config() {

@@ -130,19 +130,21 @@ impl Provider for ProfileProvider {
     async fn list_models(&self) -> Result<Vec<CatalogModel>> {
         let mut out = Vec::new();
         let mut failures = 0;
+        let mut seen = std::collections::HashSet::new();
         if self.cfg.selected_profile_id().is_none() {
             match tokio::time::timeout(Duration::from_secs(15), self.active.list_models()).await {
-                Ok(Ok(models)) => out.extend(models),
+                Ok(Ok(models)) => {
+                    for model in models {
+                        if seen.insert(model.id.clone()) {
+                            out.push(model);
+                        }
+                    }
+                }
                 _ => failures += 1,
             }
         }
         for profile in self.cfg.provider_profiles.iter().filter(|p| p.enabled) {
-            let configured = profile.models.iter().map(|id| CatalogModel {
-                id: id.clone(),
-                display_name: None,
-                owned_by: None,
-            });
-            let mut models = configured.collect::<Vec<_>>();
+            let mut models = configured_catalog(&profile.models)?;
             let fetched = async {
                 let cfg = self.cfg.profile_config(profile)?;
                 cfg.require_provider_credentials()?;
@@ -163,14 +165,11 @@ impl Provider for ProfileProvider {
                     profile.name.as_deref().unwrap_or(&profile.id),
                     model.display_name.as_deref().unwrap_or(&native)
                 ));
-                out.push(model);
+                if seen.insert(model.id.clone()) {
+                    out.push(model);
+                }
             }
         }
-        out.sort_by(|a, b| {
-            a.id.cmp(&b.id)
-                .then_with(|| b.display_name.cmp(&a.display_name))
-        });
-        out.dedup_by(|a, b| a.id == b.id);
         anyhow::ensure!(
             !out.is_empty() || failures == 0,
             "no provider model catalog is available"
@@ -199,23 +198,95 @@ pub(crate) fn parse_models_catalog(v: &Value) -> Result<Vec<CatalogModel>> {
         let id = model
             .get("id")
             .and_then(Value::as_str)
-            .filter(|id| {
-                !id.trim().is_empty() && id.len() <= 512 && !id.chars().any(char::is_control)
-            })
+            .filter(|id| valid_provider_id(id))
             .ok_or_else(|| anyhow::anyhow!("model catalog contains an invalid model id"))?;
         out.push(CatalogModel {
             id: id.into(),
-            display_name: model
-                .get("display_name")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            owned_by: model
-                .get("owned_by")
-                .and_then(Value::as_str)
-                .map(str::to_string),
+            display_name: optional_catalog_string(model, "display_name")?,
+            owned_by: optional_catalog_string(model, "owned_by")?,
         });
     }
     Ok(out)
+}
+
+fn optional_catalog_string(model: &Value, field: &str) -> Result<Option<String>> {
+    match model.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value))
+            if value.len() <= 512 && !value.chars().any(char::is_control) =>
+        {
+            Ok(Some(value.clone()))
+        }
+        _ => bail!("model catalog contains an invalid {field}"),
+    }
+}
+
+pub(crate) fn valid_provider_id(id: &str) -> bool {
+    !id.trim().is_empty() && id.len() <= 512 && !id.chars().any(char::is_control)
+}
+
+pub(crate) fn validate_request_ids(model: &str, messages: &[ChatMessage]) -> Result<()> {
+    ensure!(valid_provider_id(model), "invalid provider model id");
+    for message in messages {
+        if message.role == "tool" {
+            ensure!(
+                message
+                    .tool_call_id
+                    .as_deref()
+                    .is_some_and(valid_provider_id),
+                "invalid tool result id"
+            );
+        }
+        if let Some(calls) = &message.tool_calls {
+            ensure!(
+                calls.iter().all(|call| valid_provider_id(&call.id)),
+                "invalid tool call id"
+            );
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn configured_catalog(models: &[String]) -> Result<Vec<CatalogModel>> {
+    ensure!(
+        models.iter().all(|id| valid_provider_id(id)),
+        "invalid configured model id"
+    );
+    Ok(models
+        .iter()
+        .map(|id| CatalogModel {
+            id: id.clone(),
+            display_name: None,
+            owned_by: None,
+        })
+        .collect())
+}
+
+pub(crate) fn provider_http_error(provider: &str, status: u16) -> anyhow::Error {
+    let reason = match status {
+        400 | 422 => "request rejected",
+        401 => "authentication rejected",
+        403 => "permission denied",
+        404 => "endpoint unavailable",
+        408 | 504 => "request timed out",
+        429 => "rate limit exceeded",
+        500..=599 => "service unavailable",
+        300..=399 => "redirect refused",
+        _ => "request failed",
+    };
+    anyhow::anyhow!("{provider} HTTP {status}: {reason}")
+}
+
+pub(crate) fn sanitized_transport_error(error: &reqwest::Error) -> anyhow::Error {
+    if error.is_timeout() {
+        anyhow::anyhow!("provider request timed out")
+    } else if error.is_connect() {
+        anyhow::anyhow!("provider connection failed")
+    } else if error.is_builder() {
+        anyhow::anyhow!("provider request could not be built")
+    } else {
+        anyhow::anyhow!("provider request transport failed")
+    }
 }
 
 /// A provider HTTP response reduced to its status code and body text.
@@ -326,10 +397,10 @@ pub(crate) async fn send_streaming_with_retry(
             Ok(resp) => resp,
             Err(e) => {
                 if attempt >= MAX_ATTEMPTS {
-                    return Err(e.into());
+                    return Err(sanitized_transport_error(&e));
                 }
                 let delay = backoff_delay(attempt);
-                tracing::warn!(attempt, delay = ?delay, error = %e, "provider stream request failed; retrying");
+                tracing::warn!(attempt, delay = ?delay, "provider stream request failed; retrying");
                 tokio::time::sleep(delay).await;
                 continue;
             }
@@ -350,9 +421,7 @@ pub(crate) async fn send_streaming_with_retry(
     }
 }
 
-/// Rejects responses that cannot be streamed as SSE, using the provider's
-/// standard error shape (read body, bail): non-2xx status or a content type
-/// other than `text/event-stream`. No silent fallback inside the provider.
+/// Rejects non-2xx or non-SSE responses without exposing provider response bodies.
 pub(crate) async fn ensure_sse_response(
     resp: reqwest::Response,
     provider: &str,
@@ -367,8 +436,10 @@ pub(crate) async fn ensure_sse_response(
     if (200..300).contains(&status) && content_type.contains("text/event-stream") {
         return Ok(resp);
     }
-    let body = resp.text().await.unwrap_or_default();
-    bail!("{provider} {}: {}", status, truncate(&body, 2000));
+    if !(200..300).contains(&status) {
+        return Err(provider_http_error(provider, status));
+    }
+    bail!("{provider} response was not an SSE stream")
 }
 
 /// Accumulates one OpenAI-style streaming response: text deltas, tool-call
@@ -408,44 +479,57 @@ impl OpenAiStreamAcc {
                 .filter(|m| !m.is_empty())
                 .map(str::to_string);
         }
+        if v.get("error").is_some_and(|error| !error.is_null()) {
+            self.error = Some("OpenAI-compatible stream returned a provider error".into());
+            return String::new();
+        }
         let mut delta_text = String::new();
         if let Some(delta) = first_choice(&v).and_then(|c| c.get("delta")) {
-            if let Some(text) = delta.get("content").and_then(Value::as_str) {
-                self.text.push_str(text);
-                delta_text = text.to_string();
-            }
-            if let Some(images) = delta.get("images") {
-                if let Some(items) = images.as_array() {
-                    for item in items {
-                        if let Some(url) = item.pointer("/image_url/url").and_then(Value::as_str) {
-                            if let Ok(Some(image)) = data_url_image(url) {
-                                self.images.push(image);
-                            }
-                        }
-                    }
+            match parse_openai_message(delta) {
+                Ok((text, images)) => {
+                    self.text.push_str(&text);
+                    delta_text = text;
+                    self.images.extend(images);
                     if validate_output_images(&self.images).is_err() {
-                        self.error = Some("OpenAI stream exceeded image limits".into());
+                        self.error = Some("OpenAI stream returned invalid image content".into());
                     }
-                } else {
-                    self.error = Some("OpenAI stream returned malformed image content".into());
+                }
+                Err(_) => {
+                    self.error = Some("OpenAI stream returned malformed content".into());
                 }
             }
             if let Some(calls) = delta.get("tool_calls").and_then(Value::as_array) {
                 for call in calls {
-                    let idx = call
+                    let Some(idx) = call
                         .get("index")
                         .and_then(Value::as_u64)
                         .unwrap_or(self.tool_calls.len() as u64)
-                        as usize;
+                        .try_into()
+                        .ok()
+                        .filter(|idx: &usize| *idx < 512)
+                    else {
+                        self.error =
+                            Some("OpenAI stream returned an invalid tool call index".into());
+                        continue;
+                    };
                     while self.tool_calls.len() <= idx {
                         self.tool_calls.push(OpenAiToolCallAcc::default());
                     }
                     let slot = &mut self.tool_calls[idx];
-                    if let Some(id) = call.get("id").and_then(Value::as_str) {
-                        slot.id = id.to_string();
+                    if let Some(id) = call
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .filter(|id| !id.is_empty())
+                    {
+                        if !valid_provider_id(id) || (!slot.id.is_empty() && slot.id != id) {
+                            self.error =
+                                Some("OpenAI stream returned an invalid tool call id".into());
+                        } else {
+                            slot.id = id.to_string();
+                        }
                     }
                     if let Some(name) = call.pointer("/function/name").and_then(Value::as_str) {
-                        slot.name = name.to_string();
+                        slot.name.push_str(name);
                     }
                     if let Some(args) = call.pointer("/function/arguments").and_then(Value::as_str)
                     {
@@ -554,10 +638,10 @@ pub(crate) async fn send_with_retry(
             Ok(resp) => resp,
             Err(e) => {
                 if attempt >= MAX_ATTEMPTS {
-                    return Err(e.into());
+                    return Err(sanitized_transport_error(&e));
                 }
                 let delay = backoff_delay(attempt);
-                tracing::warn!(attempt, delay = ?delay, error = %e, "provider request failed; retrying");
+                tracing::warn!(attempt, delay = ?delay, "provider request failed; retrying");
                 tokio::time::sleep(delay).await;
                 continue;
             }
@@ -568,7 +652,10 @@ pub(crate) async fn send_with_retry(
             .get(reqwest::header::RETRY_AFTER)
             .and_then(|v| v.to_str().ok())
             .and_then(retry_after_delay);
-        let body = resp.text().await?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| sanitized_transport_error(&e))?;
         if should_retry(status, attempt) {
             let delay = retry_after.unwrap_or_else(|| backoff_delay(attempt));
             tracing::warn!(attempt, status, delay = ?delay, "provider returned retryable status; retrying");
@@ -629,6 +716,7 @@ pub(crate) fn first_choice(v: &Value) -> Option<&Value> {
 }
 
 /// Truncates to at most `n` bytes without splitting a UTF-8 character.
+#[allow(dead_code)]
 pub(crate) fn truncate(s: &str, n: usize) -> String {
     if s.len() <= n {
         return s.to_string();
@@ -682,7 +770,7 @@ pub(crate) fn validate_output_images(images: &[ImageAttachment]) -> Result<()> {
     let mut total = 0usize;
     for image in images {
         crate::media::validate_attachment(image)
-            .with_context(|| format!("invalid provider image {}", image.media_type))?;
+            .map_err(|_| anyhow::anyhow!("invalid provider image attachment"))?;
         let bytes = decode_image_base64(&image.data)?;
         total = total
             .checked_add(bytes.len())

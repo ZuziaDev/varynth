@@ -37,8 +37,32 @@ proxy_url = "http://127.0.0.1:8787"
 # Optional overrides (rarely needed):
 # google_base_url = "https://generativelanguage.googleapis.com"
 # Named provider profiles: multiple endpoints selected by `provider = "<id>"`
-# or by a model id prefixed `<id>/`. Antigravity-style gateways connect through
-# an OpenAI-compatible profile with a base URL the user supplies:
+# or by a model id prefixed `<id>/`. Legacy TOML profiles remain supported.
+# The optional OpenCode-like registry lives at ~/.varynth/config.json. It is
+# loaded before these TOML profiles and its providerOrder/modelOrder control
+# deterministic catalog order. JSON access values are references only:
+# {"env":"ANTIGRAVITY_API_KEY"} or {"keyring":"profile"}; never put a
+# plaintext API key/token in config.json.
+# Example config.json:
+# {
+#   "schemaVersion": 1,
+#   "providerOrder": ["antigravity"],
+#   "providers": [{
+#     "id": "antigravity",
+#     "name": "Antigravity gateway",
+#     "kind": "openai",
+#     "baseUrl": "https://your-openai-compatible-gateway.example",
+#     "api": "openai-compatible",
+#     "access": {"env": "ANTIGRAVITY_API_KEY"},
+#     "models": {
+#       "model-a": {"displayName": "Model A"},
+#       "model-b": {}
+#     },
+#     "modelOrder": ["model-a", "model-b"],
+#     "metadata": {"source": "local"}
+#   }]
+# }
+# JSON provider kinds: proxy, openai, anthropic, google, google-vertex.
 # [[provider_profiles]]
 # id = "antigravity"
 # kind = "openai"            # proxy | openai | anthropic | google | google-vertex

@@ -124,6 +124,40 @@ pub struct Runtime {
     provider: Box<dyn Provider>,
 }
 
+struct RuntimeConfiguration {
+    cfg: Config,
+    provider: Box<dyn Provider>,
+    mcp: McpManager,
+    jail: Jail,
+    permission: PermissionMode,
+    skills: Vec<skills::Skill>,
+}
+
+impl RuntimeConfiguration {
+    fn prepare(cfg: Config, cwd: &Path) -> Result<Self> {
+        cfg.validate()?;
+        cfg.require_provider_credentials()?;
+        let provider = providers::build(&cfg)?;
+        let mcp = McpManager::from_config(cfg.mcp_config.as_deref())?;
+        let jail = Jail::new(
+            cwd.to_path_buf(),
+            cfg.add_dirs.clone(),
+            SandboxMode::parse(&cfg.sandbox),
+            cfg.shell_allowlist.clone(),
+        );
+        let permission = PermissionMode::parse(&cfg.permission_mode);
+        let skills = skills::discover(&jail.cwd);
+        Ok(Self {
+            cfg,
+            provider,
+            mcp,
+            jail,
+            permission,
+            skills,
+        })
+    }
+}
+
 impl Runtime {
     pub fn new(cfg: Config, cwd: std::path::PathBuf) -> Result<Self> {
         cfg.require_provider_credentials()?;
@@ -137,11 +171,11 @@ impl Runtime {
         let permission = PermissionMode::parse(&cfg.permission_mode);
         let skills = skills::discover(&cwd);
         let provider = providers::build(&cfg)?;
-        let mut mcp = McpManager::from_config(cfg.mcp_config.as_deref())?;
-        let mcp_tool_count = mcp.load_tools().len();
-        if cfg.mcp_config.is_some() && mcp_tool_count == 0 {
-            tracing::warn!("MCP config loaded but no tools were discovered");
-        }
+        // Loading the registry is deliberately side-effect free. MCP clients
+        // are initialized and their tools are listed only after an explicit
+        // probe; in particular, configured stdio servers must not be spawned
+        // while the runtime is starting or being reconfigured.
+        let mcp = McpManager::from_config(cfg.mcp_config.as_deref())?;
         Ok(Self {
             cfg,
             jail,
@@ -170,9 +204,8 @@ impl Runtime {
     }
 
     pub fn with_mcp_config(mut self, path: Option<&std::path::Path>) -> Result<Self> {
-        let mut mgr = McpManager::from_config(path)?;
-        let _ = mgr.load_tools();
-        self.mcp = mgr;
+        self.mcp = McpManager::from_config(path)?;
+        self.cfg.mcp_config = path.map(std::path::Path::to_path_buf);
         Ok(self)
     }
 
@@ -298,6 +331,41 @@ impl Runtime {
         self.started_at = Instant::now();
     }
 
+    /// Resolve one model through the same profile-aware config path used by
+    /// every runtime entry point. This only prepares a candidate config; it
+    /// never mutates the live runtime.
+    pub fn resolve_model(&self, model: &str) -> Result<Config> {
+        let mut cfg = self.cfg.clone();
+        cfg.select_model(model)?;
+        Ok(cfg)
+    }
+
+    /// Switch models transactionally. Provider construction, credentials and
+    /// all other validation happen before any live runtime field changes.
+    pub async fn reconfigure_model(&mut self, model: &str) -> Result<Vec<providers::CatalogModel>> {
+        let cfg = self.resolve_model(model)?;
+        crate::google_auth::preflight(&cfg, false).await?;
+        self.reconfigure(cfg)?;
+        Ok(Self::configured_catalog(&self.cfg, Vec::new()))
+    }
+
+    /// Reload only the configured MCP registry. Constructing a manager reads
+    /// and validates JSON but does not initialize HTTP sessions or spawn stdio
+    /// children. The live manager and config path are swapped together only
+    /// after the candidate manager has been built successfully.
+    pub fn reload_mcp(&mut self, path: Option<&Path>) -> Result<()> {
+        let mcp = McpManager::from_config(path)?;
+        self.mcp = mcp;
+        self.cfg.mcp_config = path.map(Path::to_path_buf);
+        Ok(())
+    }
+
+    /// Refresh the discovered skill registry after an install or external
+    /// registry change.
+    pub fn refresh_skills(&mut self) {
+        self.skills = skills::discover(&self.jail.cwd);
+    }
+
     pub fn reconfigure(&mut self, cfg: Config) -> Result<()> {
         self.reconfigure_with_persist(cfg, |_| Ok(()))
     }
@@ -307,25 +375,72 @@ impl Runtime {
         cfg: Config,
         persist: impl FnOnce(&Config) -> Result<()>,
     ) -> Result<()> {
-        cfg.validate()?;
-        cfg.require_provider_credentials()?;
-        let provider = providers::build(&cfg)?;
-        let jail = Jail::new(
-            self.jail.cwd.clone(),
-            cfg.add_dirs.clone(),
-            SandboxMode::parse(&cfg.sandbox),
-            cfg.shell_allowlist.clone(),
-        );
-        let permission = PermissionMode::parse(&cfg.permission_mode);
-        let skills = skills::discover(&jail.cwd);
-        persist(&cfg)?;
-        self.provider = provider;
-        self.jail = jail;
-        self.permission = permission;
-        self.skills = skills;
-        self.cfg = cfg;
-        self.approved_always.clear();
+        let next = RuntimeConfiguration::prepare(cfg, &self.jail.cwd)?;
+        persist(&next.cfg)?;
+        self.install_configuration(next);
         Ok(())
+    }
+
+    /// Prepare the provider and its catalog before persisting or changing any
+    /// live fields. Declared models remain usable when a live catalog is offline.
+    pub async fn reconfigure_catalog_with_persist(
+        &mut self,
+        cfg: Config,
+        persist: impl FnOnce(&Config) -> Result<()>,
+    ) -> Result<Vec<providers::CatalogModel>> {
+        let next = RuntimeConfiguration::prepare(cfg, &self.jail.cwd)?;
+        let models =
+            match tokio::time::timeout(Duration::from_secs(5), next.provider.list_models()).await {
+                Ok(Ok(models)) => models,
+                _ => Vec::new(),
+            };
+        let models = Self::configured_catalog(&next.cfg, models);
+        persist(&next.cfg)?;
+        self.install_configuration(next);
+        Ok(models)
+    }
+
+    fn install_configuration(&mut self, mut next: RuntimeConfiguration) {
+        next.mcp.inherit_unchanged(&mut self.mcp);
+        self.provider = next.provider;
+        self.mcp = next.mcp;
+        self.jail = next.jail;
+        self.permission = next.permission;
+        self.skills = next.skills;
+        self.cfg = next.cfg;
+        self.approved_always.clear();
+    }
+
+    pub(crate) fn configured_catalog(
+        cfg: &Config,
+        mut models: Vec<providers::CatalogModel>,
+    ) -> Vec<providers::CatalogModel> {
+        for profile in cfg
+            .provider_profiles
+            .iter()
+            .filter(|profile| profile.enabled)
+        {
+            for model in &profile.models {
+                models.push(providers::CatalogModel {
+                    id: format!("{}/{model}", profile.id),
+                    display_name: Some(format!(
+                        "{} / {model}",
+                        profile.name.as_deref().unwrap_or(&profile.id)
+                    )),
+                    owned_by: None,
+                });
+            }
+        }
+        if !models.iter().any(|model| model.id == cfg.model) {
+            models.push(providers::CatalogModel {
+                id: cfg.model.clone(),
+                display_name: None,
+                owned_by: None,
+            });
+        }
+        models.sort_by(|a, b| a.id.cmp(&b.id));
+        models.dedup_by(|a, b| a.id == b.id);
+        models
     }
 
     pub fn apply_goal_slash(&mut self, user: &str) -> Option<String> {
@@ -1261,6 +1376,18 @@ impl Runtime {
 
     pub async fn list_models(&self) -> Result<Vec<providers::CatalogModel>> {
         self.provider.list_models().await
+    }
+
+    /// Build a catalog projection that always retains configured profile
+    /// models and the active model, even when live provider discovery is
+    /// unavailable. The projection contains no credentials.
+    pub async fn catalog_models(&self) -> Vec<providers::CatalogModel> {
+        let live = tokio::time::timeout(Duration::from_secs(5), self.provider.list_models())
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default();
+        Self::configured_catalog(&self.cfg, live)
     }
 
     pub fn status_json(&self, session: Option<&Session>) -> serde_json::Value {

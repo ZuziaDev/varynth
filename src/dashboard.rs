@@ -213,7 +213,7 @@ pub async fn serve(cfg: Config, cwd: PathBuf) -> Result<()> {
     let session = Session::new(&cwd.display().to_string(), &runtime.cfg.model)?;
     let host = cfg.dashboard_host.clone();
     let port = cfg.dashboard_port;
-    let models = runtime.list_models().await.unwrap_or_default();
+    let models = runtime.catalog_models().await;
     let status = runtime.status_json(Some(&session));
     let (events_tx, _) = broadcast::channel(crate::gateway::EVENT_CAPACITY);
     let state = AppState {
@@ -477,20 +477,17 @@ async fn api_status(State(st): State<AppState>) -> impl IntoResponse {
 }
 
 async fn api_models(State(st): State<AppState>) -> impl IntoResponse {
-    let snap = st.snap.read().await;
-    if !snap.models.is_empty() {
-        return Json(serde_json::json!({"ok": true, "models": snap.models}));
-    }
-    drop(snap);
     let Ok(g) = st.inner.try_lock() else {
         return Json(
             serde_json::json!({"ok": false, "error": "runtime busy; retry after the active turn"}),
         );
     };
-    match g.runtime.list_models().await {
-        Ok(m) => Json(serde_json::json!({"ok": true, "models": m})),
-        Err(e) => Json(serde_json::json!({"ok": false, "error": e.to_string()})),
+    let models = g.runtime.catalog_models().await;
+    {
+        let mut snap = st.snap.write().await;
+        snap.models = models.clone();
     }
+    Json(serde_json::json!({"ok": true, "models": models}))
 }
 
 async fn api_session_new(State(st): State<AppState>) -> Response {
@@ -863,13 +860,17 @@ async fn api_media_get(Path(id): Path<String>) -> Response {
 }
 
 async fn api_studio(State(st): State<AppState>) -> Response {
-    let models = st.snap.read().await.models.clone();
     let Ok(g) = st.inner.try_lock() else {
         return request_error(
             StatusCode::CONFLICT,
             "runtime busy; retry after the active turn",
         );
     };
+    let models = g.runtime.catalog_models().await;
+    {
+        let mut snap = st.snap.write().await;
+        snap.models = models.clone();
+    }
     let skills = g
         .runtime
         .skills
@@ -936,7 +937,10 @@ async fn api_studio_mcp_probe(
 #[derive(Debug, Deserialize)]
 struct StudioMcpAddReq {
     id: String,
-    url: String,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    entry: Option<serde_json::Value>,
 }
 
 async fn api_studio_mcp_add(
@@ -947,33 +951,90 @@ async fn api_studio_mcp_add(
         Ok(value) => value,
         Err(error) => return request_error(StatusCode::BAD_REQUEST, error),
     };
-    let url = match reqwest::Url::parse(req.url.trim()) {
-        Ok(value)
-            if matches!(value.scheme(), "http" | "https")
-                && value.username().is_empty()
-                && value.password().is_none() =>
-        {
-            value.to_string()
+    let entry = match (req.entry, req.url) {
+        (Some(value), None) => value,
+        (Some(_), Some(_)) => {
+            return request_error(StatusCode::BAD_REQUEST, "provide either entry or url")
         }
-        _ => {
-            return request_error(
-                StatusCode::BAD_REQUEST,
-                "MCP URL must be an HTTP(S) URL without credentials",
-            )
+        (None, Some(url)) => {
+            let url = match reqwest::Url::parse(url.trim()) {
+                Ok(value)
+                    if matches!(value.scheme(), "http" | "https")
+                        && value.username().is_empty()
+                        && value.password().is_none() =>
+                {
+                    value.to_string()
+                }
+                _ => {
+                    return request_error(
+                        StatusCode::BAD_REQUEST,
+                        "MCP URL must be an HTTP(S) URL without credentials",
+                    )
+                }
+            };
+            serde_json::json!({"type":"http","url":url})
+        }
+        (None, None) => {
+            return request_error(StatusCode::BAD_REQUEST, "MCP entry or url is required")
         }
     };
-    let g = st.inner.lock().await;
+    let transport = entry
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("http")
+        .to_ascii_lowercase();
+    if !matches!(
+        transport.as_str(),
+        "http" | "streamable-http" | "streamable_http" | "http-streamable" | "stdio"
+    ) {
+        return request_error(StatusCode::BAD_REQUEST, "unsupported MCP transport");
+    }
+    if transport == "stdio"
+        && entry
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .is_none()
+    {
+        return request_error(
+            StatusCode::BAD_REQUEST,
+            "stdio MCP entries require a command",
+        );
+    }
+    let Ok(mut g) = st.inner.try_lock() else {
+        return request_error(
+            StatusCode::CONFLICT,
+            "runtime busy; retry after the active turn",
+        );
+    };
     let path = g
         .runtime
         .cfg
         .mcp_config
         .clone()
         .unwrap_or_else(|| g.runtime.jail.cwd.join(".varynth/mcp.json"));
-    let entry = serde_json::json!({"type":"http","url":url});
-    match crate::mcp::add_server_entry(&path, &id, &entry, false) {
-        Ok(()) => Json(serde_json::json!({"ok":true,"id":id})).into_response(),
-        Err(_) => request_error(StatusCode::BAD_REQUEST, "MCP server could not be added"),
+    let snapshot = match crate::mcp::snapshot_config(&path) {
+        Ok(snapshot) => snapshot,
+        Err(error) => return request_error(StatusCode::BAD_REQUEST, error.to_string()),
+    };
+    if let Err(error) = crate::mcp::add_server_entry(&path, &id, &entry, false) {
+        return request_error(StatusCode::BAD_REQUEST, error.to_string());
     }
+    let mut cfg = g.runtime.cfg.clone();
+    cfg.mcp_config = Some(path.clone());
+    if let Err(error) = g.runtime.reconfigure_with_persist(cfg, |_| Ok(())) {
+        let _ = snapshot.restore();
+        return request_error(
+            StatusCode::BAD_REQUEST,
+            format!("MCP server could not be reloaded: {error}"),
+        );
+    }
+    st.refresh_snapshot(&g, false).await;
+    let models = g.runtime.catalog_models().await;
+    {
+        let mut snap = st.snap.write().await;
+        snap.models = models;
+    }
+    Json(serde_json::json!({"ok":true,"id":id,"entry":entry,"mcp":studio::mcp_rows(g.runtime.mcp.status())})).into_response()
 }
 
 #[derive(Debug, Deserialize)]

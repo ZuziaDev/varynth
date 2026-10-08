@@ -4,8 +4,9 @@ use tokio_stream::StreamExt;
 
 use crate::config::Config;
 use crate::providers::{
-    ensure_sse_response, needs_param_degrade, send_streaming_with_retry, send_with_retry, truncate,
-    usage_from_anthropic, CatalogModel, Completion, Provider, SseParser, Usage,
+    api_v1_base, ensure_sse_response, needs_param_degrade, provider_http_error,
+    send_streaming_with_retry, send_with_retry, usage_from_anthropic, CatalogModel, Completion,
+    Provider, SseParser, Usage,
 };
 use crate::session::{ChatMessage, ToolCall};
 
@@ -16,6 +17,7 @@ pub struct AnthropicProvider {
     effort: String,
     max_tokens: Option<u32>,
     temperature: Option<f32>,
+    custom_base: bool,
 }
 
 impl AnthropicProvider {
@@ -23,16 +25,16 @@ impl AnthropicProvider {
         let key = cfg
             .anthropic_api_key
             .clone()
-            .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
-            .context("ANTHROPIC_API_KEY missing")?;
-        let base = cfg
-            .anthropic_base_url
-            .clone()
-            .unwrap_or_else(|| "https://api.anthropic.com".into())
-            .trim_end_matches('/')
-            .to_string();
+            .filter(|key| !key.trim().is_empty())
+            .context("Anthropic API key missing")?;
+        let base = api_v1_base(
+            cfg.anthropic_base_url
+                .as_deref()
+                .unwrap_or("https://api.anthropic.com"),
+        )?;
         Ok(Self {
             client: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
                 .timeout(std::time::Duration::from_secs(180))
                 .build()?,
             base,
@@ -40,6 +42,7 @@ impl AnthropicProvider {
             effort: cfg.effort.trim().to_lowercase(),
             max_tokens: cfg.max_tokens,
             temperature: cfg.temperature,
+            custom_base: cfg.anthropic_base_url.is_some(),
         })
     }
 
@@ -350,26 +353,8 @@ fn fallback_catalog() -> Vec<CatalogModel> {
 }
 
 /// Parses the `/v1/models` response's `data[]` into catalog entries.
-fn parse_models_catalog(v: &Value) -> Vec<CatalogModel> {
-    let mut out = Vec::new();
-    if let Some(arr) = v.get("data").and_then(Value::as_array) {
-        for m in arr {
-            if let Some(id) = m.get("id").and_then(Value::as_str) {
-                out.push(CatalogModel {
-                    id: id.to_string(),
-                    display_name: m
-                        .get("display_name")
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                    owned_by: m
-                        .get("owned_by")
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                });
-            }
-        }
-    }
-    out
+fn parse_models_catalog(v: &Value) -> Result<Vec<CatalogModel>> {
+    super::parse_models_catalog(v)
 }
 
 #[async_trait::async_trait]
@@ -381,6 +366,7 @@ impl Provider for AnthropicProvider {
         messages: &[ChatMessage],
         tools: &[Value],
     ) -> Result<Completion> {
+        super::validate_request_ids(model, messages)?;
         let messages = to_anthropic_messages(messages);
         let mut body = anthropic_body(
             model,
@@ -391,7 +377,7 @@ impl Provider for AnthropicProvider {
             self.max_tokens,
             self.temperature,
         );
-        let url = format!("{}/v1/messages", self.base);
+        let url = format!("{}/messages", self.base);
         let mut resp = send_with_retry(|| self.messages_request(&url, &body)).await?;
         if needs_param_degrade(resp.status, &resp.body, "thinking")
             && body.get("thinking").is_some()
@@ -402,9 +388,10 @@ impl Provider for AnthropicProvider {
             resp = send_with_retry(|| self.messages_request(&url, &body)).await?;
         }
         if !resp.is_success() {
-            anyhow::bail!("anthropic {}: {}", resp.status, truncate(&resp.body, 2000));
+            return Err(provider_http_error("Anthropic", resp.status));
         }
-        let v: Value = serde_json::from_str(&resp.body)?;
+        let v: Value = serde_json::from_str(&resp.body)
+            .map_err(|_| anyhow::anyhow!("Anthropic returned invalid JSON"))?;
         let mut out_text = String::new();
         let mut tool_calls = Vec::new();
         if let Some(arr) = v.get("content").and_then(|c| c.as_array()) {
@@ -455,6 +442,7 @@ impl Provider for AnthropicProvider {
         tools: &[Value],
         on_delta: &mut (dyn for<'a> FnMut(&'a str) + Send),
     ) -> Result<Completion> {
+        super::validate_request_ids(model, messages)?;
         let messages = to_anthropic_messages(messages);
         let mut body = anthropic_body(
             model,
@@ -466,7 +454,7 @@ impl Provider for AnthropicProvider {
             self.temperature,
         );
         body["stream"] = json!(true);
-        let url = format!("{}/v1/messages", self.base);
+        let url = format!("{}/messages", self.base);
         let resp = send_streaming_with_retry(|| self.messages_request(&url, &body)).await?;
         let resp = ensure_sse_response(resp, "anthropic").await?;
 
@@ -495,25 +483,28 @@ impl Provider for AnthropicProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<CatalogModel>> {
-        let url = format!("{}/v1/models", self.base);
-        let resp = send_with_retry(|| {
-            self.client
-                .get(&url)
-                .header("x-api-key", &self.key)
-                .header("anthropic-version", "2023-06-01")
-        })
-        .await;
-        if let Ok(resp) = resp {
-            if resp.is_success() {
-                if let Ok(v) = serde_json::from_str::<Value>(&resp.body) {
-                    let models = parse_models_catalog(&v);
-                    if !models.is_empty() {
-                        return Ok(models);
-                    }
-                }
+        let url = format!("{}/models", self.base);
+        let fetched = async {
+            let resp = send_with_retry(|| {
+                self.client
+                    .get(&url)
+                    .header("x-api-key", &self.key)
+                    .header("anthropic-version", "2023-06-01")
+            })
+            .await?;
+            if !resp.is_success() {
+                return Err(provider_http_error("Anthropic", resp.status));
             }
+            let v: Value = serde_json::from_str(&resp.body)
+                .map_err(|_| anyhow::anyhow!("Anthropic returned invalid model catalog JSON"))?;
+            parse_models_catalog(&v)
         }
-        Ok(fallback_catalog())
+        .await;
+        match fetched {
+            Ok(models) if !models.is_empty() => Ok(models),
+            result if self.custom_base => result,
+            _ => Ok(fallback_catalog()),
+        }
     }
 }
 
@@ -613,7 +604,7 @@ mod tests {
             {"id": "claude-x", "display_name": "Claude X", "type": "model"},
             {"id": "claude-y"}
         ]});
-        let out = parse_models_catalog(&v);
+        let out = parse_models_catalog(&v).unwrap();
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].id, "claude-x");
         assert_eq!(out[0].display_name.as_deref(), Some("Claude X"));
