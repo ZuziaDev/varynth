@@ -1,0 +1,121 @@
+model = "grok-4.7-build"
+provider = "proxy"
+permission_mode = "acceptEdits"
+sandbox = "workspace-write"
+# magenta | system | dark | light | safe | custom:<name>  (files: ~/.varynth/themes/<name>.json)
+theme = "magenta"
+# auto_compact = true
+# auto_compact_percent = 76
+# hard timeout for one lifecycle-hook invocation (seconds)
+# hooks_timeout_secs = 10
+# Desktop notifications: off (default) | auto. Auto raises one OS toast for
+# an approval request, a finished background subagent/task, and a finished
+# turn while the terminal is unfocused (re-checked after the delay).
+# notifications = "auto"
+# notifications_delay_secs = 5
+# use_keyring = true
+# docker_image = "varynth-sandbox:latest"
+# docker_network = "none"
+proxy_url = "http://127.0.0.1:8787"
+# proxy_token = "set via VARYNTH_PROXY_TOKEN"
+# OpenAI-compatible endpoint (models: grok-4.5, grok-4.7-build, grok-4.7, grok-4.7-build):
+# provider = "openai"
+# model = "grok-4.7-build"
+# openai_base_url = "https://codex-everywhere.com"
+# openai_api_key = "set via OPENAI_API_KEY"
+# Direct Anthropic endpoint:
+# provider = "anthropic"
+# anthropic_base_url = "https://api.anthropic.com"
+# anthropic_api_key = "set via ANTHROPIC_API_KEY"
+# Official Google Gemini endpoint (API key):
+# provider = "google"
+# model = "gemini-2.5-pro"
+# google_api_key = "set via GOOGLE_API_KEY or GEMINI_API_KEY"
+# google_auth = "api-key"  # api-key | oauth
+# Official Google Vertex AI endpoint (OAuth):
+# provider = "google-vertex"
+# google_auth = "oauth"
+# google_project = "your-gcp-project"
+# google_location = "us-central1"  # or "global"
+# Sign in once with: varynth google login --client-id <installed-app-client-id>
+#   then use google_auth = "oauth" (works for both Gemini and Vertex).
+# Automatic sign-in: with google_auth = "oauth" and no stored credential,
+# model-using commands open the browser login automatically when a non-secret
+# OAuth client id is configured. Enabled by default; disable with:
+# google_auto_login = false
+# google_client_id = "<installed-app-client-id>"  # or VARYNTH_GOOGLE_CLIENT_ID
+# Optional overrides (rarely needed):
+# google_base_url = "https://generativelanguage.googleapis.com"
+# Named provider profiles: multiple endpoints selected by `provider = "<id>"`
+# or by a model id prefixed `<id>/`. Legacy TOML profiles remain supported.
+# The optional OpenCode-like registry lives at ~/.varynth/config.json. It is
+# loaded before these TOML profiles and its providerOrder/modelOrder control
+# deterministic catalog order. JSON access values are references only:
+# {"env":"ANTIGRAVITY_API_KEY"} or {"keyring":"profile"}; never put a
+# plaintext API key/token in config.json.
+# Example config.json:
+# {
+#   "schemaVersion": 1,
+#   "providerOrder": ["antigravity"],
+#   "providers": [{
+#     "id": "antigravity",
+#     "name": "Antigravity gateway",
+#     "kind": "openai",
+#     "baseUrl": "https://your-openai-compatible-gateway.example",
+#     "api": "openai-compatible",
+#     "access": {"env": "ANTIGRAVITY_API_KEY"},
+#     "models": {
+#       "model-a": {"displayName": "Model A"},
+#       "model-b": {}
+#     },
+#     "modelOrder": ["model-a", "model-b"],
+#     "metadata": {"source": "local"}
+#   }]
+# }
+# JSON provider kinds: proxy, openai, anthropic, google, google-vertex.
+# [[provider_profiles]]
+# id = "antigravity"
+# kind = "openai"            # proxy | openai | anthropic | google | google-vertex
+# name = "Antigravity gateway"
+# base_url = "https://your-openai-compatible-gateway.example"
+# api_key_env = "ANTIGRAVITY_API_KEY"   # or api_key = "..." (keyring preferred)
+# # keyring_field = "antigravity"       # per-profile keyring slot
+# # models = ["model-a", "model-b"]     # pinned fallback catalog entries
+# enabled = true
+# effort = "xhigh"  # one of: low, medium, high, xhigh, max, ultra
+# max_tokens = 8192  # optional cap on model output tokens
+# temperature = 0.7  # optional sampling temperature
+# goal_max_rounds = 25  # optional cap for /goal loops
+# goal_max_minutes = 30  # optional wall-time cap for /goal
+# stream = true  # set false to disable SSE token streaming
+# add_dirs = ["C:/path/to/extra/workspace"]
+dashboard_host = "127.0.0.1"
+dashboard_port = 7420
+# dashboard_token = "set via VARYNTH_DASHBOARD_TOKEN for remote API access"
+# mcp_config = "C:/path/to/mcp.json"
+# Telegram bot (or set VARYNTH_TELEGRAM_BOT_TOKEN / telegram.env):
+# telegram_bot_token = ""
+telegram_allow_from = ["123456789"]
+# One official account each (secret via stdin, not this file):
+#   varynth account connect openai|claude|openrouter|vercel|opencode|github|gitlab -
+#   varynth account connect cloudflare --account-id <32-hex> -
+#   `workers` is the same Cloudflare slot. GitHub/GitLab are plugin tokens only.
+#   VARYNTH_GITHUB_TOKEN, VARYNTH_GITHUB_ACCOUNT
+#   VARYNTH_GOOGLE_TOKEN, VARYNTH_GOOGLE_ACCOUNT
+max_tool_rounds = 24
+# Mirrors the built-in default (build tools only; no interpreters or network
+# clients). The read-only commands plan mode advertises — ls, dir, cat, type,
+# pwd, whoami, where, rg, fd, git — are part of this set. Add an interpreter
+# yourself only if you accept that `binary <code>` runs arbitrary code; its
+# exec-shaped flags (`python -c`, `node -e`, ...) stay refused.
+shell_allowlist = [
+  "git", "cargo", "rustc", "npm", "pnpm", "rg", "fd",
+  "dir", "ls", "type", "cat", "echo", "where", "whoami", "pwd",
+  "cd", "mkdir", "copy", "move", "del", "rm", "tar", "zip", "unzip",
+  "go", "dotnet", "tsc", "bun"
+]
+
+# Local Laya/Clef decision service. `varynth decide` starts it on demand
+# when the URL is loopback and health fails.
+# decisions_url = "http://127.0.0.1:8791"
+# decisions_autostart = true

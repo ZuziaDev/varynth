@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Varynth sovereign local coding runtime, 61-model gateway, autonomous tools, MCP, and operator control room">
+  <title>Varynth Control Room — Sovereign AI Runtime</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="/assets/geist-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/assets/control-room.css">
+  <script type="module" src="/assets/control-room.mjs"></script>
+</head>
+<body>
+  <!-- Deep Space Singularity & Accretion Glow Layer -->
+  <div class="cosmic-backdrop" aria-hidden="true">
+    <div class="cosmic-glow glow-cyan"></div>
+    <div class="cosmic-glow glow-violet"></div>
+    <div class="cosmic-grid"></div>
+  </div>
+
+  <a class="skip-link" href="#workspace">Skip to workspace</a>
+  
+  <div class="shell">
+    <header class="app-header">
+      <a class="brand" href="/" aria-label="Varynth Control Room">
+        <img src="/assets/mark.svg" alt="Varynth" width="32" height="32" class="brand-mark-img">
+        <span class="brand-title">Varynth</span>
+        <span class="brand-surface">Control Room</span>
+      </a>
+      <div class="header-workspace">
+        <svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#terminal"></use></svg>
+        <span id="workspace-path">Workspace</span>
+        <span class="pulse-indicator" title="Autonomous Runtime Active">
+          <span class="bh-pulse-dot"></span>
+        </span>
+      </div>
+      <div class="header-actions">
+        <button class="icon-button mobile-sessions" id="sessions-toggle" type="button" aria-label="Open sessions" aria-controls="session-rail" aria-expanded="false" title="Sessions"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#panel-left"></use></svg></button>
+        <button class="connection-button" id="connection-open" type="button" title="Connection settings"><span class="status-dot" id="connection-dot"></span><span id="connection-status">Connecting</span><svg class="icon small" aria-hidden="true"><use href="/assets/icons.svg#chevron-down"></use></svg></button>
+        <button class="icon-button" id="inspector-toggle" type="button" aria-label="Toggle inspector" aria-controls="inspector" aria-expanded="true" title="Inspector"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#panel-right"></use></svg></button>
+      </div>
+    </header>
+
+    <aside class="session-rail" id="session-rail" aria-label="Sessions">
+      <div class="rail-heading"><h2>Sessions<span class="rail-count" id="session-count">0</span></h2><button class="icon-button drawer-close" id="sessions-close" aria-label="Close sessions" type="button"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#x"></use></svg></button></div>
+      <button class="button new-session" id="new-session" type="button"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#plus"></use></svg>New session</button>
+      <label class="search-box"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#search"></use></svg><input id="session-search" type="search" aria-label="Search sessions" placeholder="Search sessions" autocomplete="off"></label>
+      <div class="session-list" id="sessions" aria-label="Saved sessions"><div class="quiet-empty">Loading sessions…</div></div>
+      <footer class="rail-footer"><span class="status-dot good"></span><span>Local workspace</span><a class="icon-button" href="/diff" aria-label="Open diff viewer" title="Diff viewer"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#file-diff"></use></svg></a></footer>
+    </aside>
+
+    <main class="workspace" id="workspace" tabindex="-1">
+      <div class="workspace-heading">
+        <div class="session-identity"><h1 id="session-title">New session</h1><span id="session-subtitle">Loading workspace</span></div>
+        <div class="workspace-controls"><span class="runtime-state" id="runtime-state">Idle</span><button class="icon-button" id="pause-session" type="button" aria-label="Pause session" title="Pause at the next model boundary" disabled><svg class="icon" aria-hidden="true"><use id="pause-icon" href="/assets/icons.svg#pause"></use></svg></button><button class="icon-button" id="context-open" type="button" aria-label="Edit session context" title="Edit context" disabled><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#braces"></use></svg></button><button class="icon-button" id="session-fork" type="button" aria-label="Fork session" title="Fork this session" disabled><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#git-branch"></use></svg></button><button class="icon-button" id="session-export" type="button" aria-label="Export session" title="Download redacted transcript" disabled><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#download"></use></svg></button><button class="icon-button" id="session-resume" type="button" aria-label="Copy resume command" title="Copy resume command" disabled><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#copy"></use></svg></button><a class="icon-button" href="/diff" aria-label="View diff" title="Diff viewer"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#file-diff"></use></svg></a></div>
+      </div>
+      <div class="workspace-tabs" role="tablist" aria-label="Session views">
+        <button id="tab-conversation" class="tab active" role="tab" aria-selected="true" aria-controls="conversation-panel" tabindex="0" type="button"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#message-square"></use></svg>Conversation</button>
+        <button id="tab-activity" class="tab" role="tab" aria-selected="false" aria-controls="activity-panel" tabindex="-1" type="button"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#activity"></use></svg>Activity<span id="activity-count" class="count">0</span></button>
+        <button id="tab-approvals" class="tab" role="tab" aria-selected="false" aria-controls="approvals-panel" tabindex="-1" type="button"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#shield-check"></use></svg>Approvals<span id="approval-count" class="count">0</span></button>
+        <button id="tab-usage" class="tab" role="tab" aria-selected="false" aria-controls="usage-panel" tabindex="-1" type="button"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#gauge"></use></svg>Usage</button>
+        <button id="tab-overview" class="tab" role="tab" aria-selected="false" aria-controls="overview-panel" tabindex="-1" type="button"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#activity"></use></svg>Overview</button>
+        <button id="tab-studio" class="tab" role="tab" aria-selected="false" aria-controls="studio-panel" tabindex="-1" type="button"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#settings-2"></use></svg>Studio</button>
+      </div>
+      <div class="inline-error" id="page-error" role="alert" hidden></div>
+      <section class="conversation-panel content-panel" id="conversation-panel" role="tabpanel" aria-labelledby="tab-conversation">
+        <div class="conversation" id="log" aria-label="Conversation">
+          <div class="conversation-empty">
+            <div class="empty-mark-wrap">
+              <img src="/assets/mark.svg" alt="" width="56" height="56" class="empty-mark">
+            </div>
+            <h2>Quantum Runtime Ready</h2>
+            <p>Select a model, enter instructions, or assign an autonomous goal to start.</p>
+          </div>
+        </div>
+      </section>
+      <section class="content-panel activity-panel" id="activity-panel" role="tabpanel" aria-labelledby="tab-activity" hidden>
+        <div class="panel-toolbar"><h2>Live activity</h2><label class="compact-select">Show<select id="event-filter" aria-label="Filter activity"><option value="all">All events</option><option value="tools">Tools</option><option value="system">System</option><option value="errors">Errors</option></select></label><button class="icon-button" id="clear-events" type="button" aria-label="Clear activity view" title="Clear view"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#x"></use></svg></button></div>
+        <div class="event-feed" id="events" aria-label="Live events"><div class="quiet-empty">No events yet.</div></div>
+      </section>
+      <section class="content-panel approvals-panel" id="approvals-panel" role="tabpanel" aria-labelledby="tab-approvals" hidden>
+        <div class="panel-toolbar"><h2>Pending approvals</h2><span class="muted" id="approval-summary">No pending requests</span></div>
+        <div id="approvals" class="approval-list"><div class="quiet-empty">No pending requests.</div></div>
+      </section>
+      <section class="content-panel metrics-panel" id="usage-panel" role="tabpanel" aria-labelledby="tab-usage" hidden>
+        <div class="panel-toolbar"><h2>Usage</h2><span class="muted" id="usage-window">Since serve started</span><button class="icon-button" id="usage-refresh" type="button" aria-label="Refresh usage" title="Refresh usage"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#refresh-cw"></use></svg></button></div>
+        <div class="inline-error" id="usage-error" role="alert" hidden></div>
+        <div class="overview-grid" id="usage-grid">
+          <section class="summary-card"><div class="section-heading"><h3>Requests</h3><span class="state-label" id="usage-scope">—</span></div><p class="metric" id="usage-requests">—</p><p class="metric-note" id="usage-requests-note">Provider round-trips in this serve process.</p></section>
+          <section class="summary-card"><div class="section-heading"><h3>Tokens</h3><span class="state-label" id="usage-report-state">Not reported</span></div><p class="metric" id="usage-total-tokens">—</p><div class="meter" role="img" aria-label="Input versus output token split"><span class="meter-input" id="usage-input-meter"></span><span class="meter-output" id="usage-output-meter"></span></div><div class="metric-split"><span id="usage-inline-input">Input —</span><span id="usage-inline-output">Output —</span></div><p class="metric-note">Provider-reported usage only; no estimates are counted here.</p></section>
+          <section class="summary-card"><div class="section-heading"><h3>Context</h3><span class="muted" id="usage-context-limit"></span></div><p class="metric" id="usage-context">—</p><div class="meter" role="img" aria-label="Context estimate against the message budget"><span class="meter-context" id="usage-context-meter"></span></div><p class="metric-note" id="usage-context-note">Context estimate for the active session.</p></section>
+          <section class="summary-card span-2"><div class="section-heading"><h3>Limits</h3><span class="muted">Configured ceilings</span></div><dl class="data-list limits-list" id="usage-limits"><div><dt>Limits</dt><dd>Not loaded</dd></div></dl></section>
+        </div>
+      </section>
+      <section class="content-panel overview-panel" id="overview-panel" role="tabpanel" aria-labelledby="tab-overview" hidden>
+        <div class="panel-toolbar"><h2>Overview</h2><span class="muted" id="overview-freshness">Not loaded</span><button class="icon-button" id="overview-refresh" type="button" aria-label="Refresh overview" title="Refresh overview"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#refresh-cw"></use></svg></button></div>
+        <div class="inline-error" id="overview-error" role="alert" hidden></div>
+        <div class="overview-grid">
+          <section class="summary-card span-2"><div class="section-heading"><h3>Serve endpoint</h3><span class="state-label" id="overview-serve-state">—</span></div><div class="stat-strip"><div><span class="stat-label">URL</span><a class="stat-link" id="overview-url" href="/" target="_blank" rel="noreferrer">—</a></div><div><span class="stat-label">Port</span><span class="stat-value" id="overview-port">—</span></div><div><span class="stat-label">Uptime</span><span class="stat-value" id="overview-uptime">—</span></div><div><span class="stat-label">Access</span><span class="stat-value" id="overview-token">—</span></div></div></section>
+          <section class="summary-card"><div class="section-heading"><h3>Runtime</h3><span class="state-label" id="overview-runtime-state">—</span></div><dl class="data-list" id="overview-runtime"><div><dt>Provider</dt><dd>Not loaded</dd></div></dl></section>
+          <section class="summary-card"><div class="section-heading"><h3>Plan &amp; auth</h3><span class="state-label" id="overview-plan-state">No plan</span></div><dl class="data-list" id="overview-plan"><div><dt>Plan</dt><dd>—</dd></div></dl><div class="auth-line" id="overview-auth"><span class="state-label">—</span></div></section>
+          <section class="summary-card span-2"><div class="section-heading"><h3>Decisions service</h3><span class="state-label" id="overview-decisions-state">—</span></div><div class="service-grid" id="overview-decisions"></div></section>
+          <section class="summary-card span-2"><div class="section-heading"><h3>MCP &amp; deferred tools</h3><span class="muted" id="overview-mcp-summary">—</span></div><div class="mcp-list" id="overview-mcp"><div class="quiet-empty">Not loaded.</div></div></section>
+        </div>
+      </section>
+      <section class="content-panel studio-panel" id="studio-panel" role="tabpanel" aria-labelledby="tab-studio" hidden>
+        <div class="studio-toolbar"><div><h2>Studio</h2><p>Configure the local runtime and theme.</p></div><button class="icon-button" id="studio-refresh" type="button" aria-label="Refresh Studio" title="Refresh Studio"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#refresh-cw"></use></svg></button></div>
+        <div class="inline-error studio-error" id="studio-error" role="alert" hidden></div>
+        <div class="studio-grid">
+          <section class="studio-section"><div class="section-heading"><h3>Provider profile</h3><span class="state-label" id="studio-provider-state">Not loaded</span></div><dl class="data-list" id="studio-provider"><div><dt>Provider</dt><dd>—</dd></div><div><dt>Profile</dt><dd>—</dd></div><div><dt>Model</dt><dd>—</dd></div></dl><form class="studio-form" id="studio-provider-form"><label>Profile<select id="studio-profile-select" aria-label="Provider profile"><option value="">Current profile</option></select></label><div class="studio-form-grid"><label>Id<input id="studio-profile-id" type="text" autocomplete="off"></label><label>Kind<input id="studio-profile-kind" type="text" autocomplete="off"></label><label>Base URL<input id="studio-profile-base-url" type="url" autocomplete="off"></label><label>Model<input id="studio-profile-model" type="text" autocomplete="off"></label><label>API key env<input id="studio-profile-api-key-env" type="text" autocomplete="off"></label><label>Auth<input id="studio-profile-auth" type="text" autocomplete="off"></label><label>Project<input id="studio-profile-project" type="text" autocomplete="off"></label><label>Location<input id="studio-profile-location" type="text" autocomplete="off"></label></div><button class="button subtle" type="submit">Save profile</button><div class="inline-error form-error" id="studio-provider-error" role="alert" hidden></div></form></section>
+          <section class="studio-section"><div class="section-heading"><h3>MCP servers</h3><span class="muted" id="studio-mcp-count">0</span></div><div class="studio-list" id="studio-mcp"><div class="quiet-empty">No MCP servers returned.</div></div><form class="studio-form" id="studio-mcp-form"><div class="studio-form-grid studio-form-grid-compact"><label>Id<input id="studio-mcp-id" type="text" autocomplete="off" required></label><label>HTTP URL<input id="studio-mcp-url" type="url" autocomplete="off" required></label></div><button class="button subtle" type="submit">Add HTTP server</button><div class="inline-error form-error" id="studio-mcp-error" role="alert" hidden></div></form></section>
+          <section class="studio-section"><div class="section-heading"><h3>Installed skills</h3><span class="muted" id="studio-skill-count">0</span></div><div class="studio-chip-list" id="studio-skills"><span class="muted">No installed skills returned.</span></div><form class="studio-form" id="studio-skill-form"><label>Source<textarea id="studio-skill-source" rows="3" spellcheck="false" placeholder="SKILL.md or github.com/owner/repo"></textarea></label><button class="button subtle" type="submit">Install skill</button><div class="inline-error form-error" id="studio-skill-error" role="alert" hidden></div></form></section>
+          <section class="studio-section"><div class="section-heading"><h3>Curated plugins</h3><span class="muted" id="studio-plugin-count">0</span></div><div class="studio-list" id="studio-plugins"><div class="quiet-empty">No curated plugins returned.</div></div></section>
+          <section class="studio-section theme-section"><div class="section-heading"><div><h3>Theme tokens</h3><p class="section-note">Paste JSON or CSS custom properties.</p></div><span class="state-label" id="theme-state">Not loaded</span></div><textarea id="theme-input" class="theme-input" rows="9" spellcheck="false" aria-label="Theme tokens" placeholder='{"background":"oklch(0.15 0.02 260)","radius":"6px"}'></textarea><div class="theme-actions"><label class="button subtle theme-file-label" for="theme-file"><svg class="icon small" aria-hidden="true"><use href="/assets/icons.svg#arrow-up"></use></svg>Upload theme<input id="theme-file" type="file" accept=".json,.css,application/json,text/css" hidden></label><button class="button subtle" id="theme-load" type="button">Reload</button><button class="button subtle" id="theme-apply" type="button">Apply</button><button class="button primary" id="theme-save" type="button">Save theme</button><button class="icon-button" id="theme-export" type="button" aria-label="Export theme" title="Export theme"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#arrow-up"></use></svg></button></div><div class="inline-error" id="theme-error" role="alert" hidden></div><a class="tweakcn-link" href="https://tweakcn.com/editor/theme" target="_blank" rel="noreferrer">Open tweakcn editor <svg class="icon small" aria-hidden="true"><use href="/assets/icons.svg#arrow-up"></use></svg></a></section>
+        </div>
+      </section>
+      <form class="composer" id="form">
+        <div class="composer-field" id="composer-dropzone"><label class="sr-only" for="input">Message</label><textarea id="input" rows="3" placeholder="What are we working on? Enter instructions or /goal..." spellcheck="false"></textarea><div class="attachment-chips" id="attachment-chips" aria-live="polite"></div></div>
+        <div class="composer-toolbar"><label class="composer-model"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#layers"></use></svg><span class="sr-only">Model</span><select id="model" aria-label="Model"><option value="">Loading models…</option></select></label><label id="attachment-picker" class="icon-button attachment-picker" for="attachment-input" aria-label="Attach image" title="Attach image"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#plus"></use></svg></label><input id="attachment-input" type="file" accept="image/*" multiple hidden><span class="composer-status" id="composer-status">Ready</span><button class="button primary send" id="send" type="submit" disabled><span>Send</span><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#arrow-up"></use></svg></button></div>
+      </form>
+    </main>
+
+    <aside class="inspector" id="inspector" aria-label="Runtime inspector">
+      <div class="inspector-heading"><h2>Inspector</h2><button class="icon-button" id="inspector-close" type="button" aria-label="Close inspector" title="Close inspector"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#x"></use></svg></button></div>
+      <section class="inspector-section"><h3>Runtime</h3><dl class="data-list" id="runtime-data"><div><dt>Provider</dt><dd>Not connected</dd></div></dl></section>
+      <section class="inspector-section"><div class="section-heading"><h3>Session</h3><button class="icon-button" id="resume-copy" type="button" aria-label="Copy resume command" title="Copy resume command" disabled><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#copy"></use></svg></button></div><div class="resume-line"><code id="resume-command">varynth resume &lt;id&gt;</code></div><div class="section-heading checkpoint-heading"><h3>Checkpoints</h3><span class="muted" id="checkpoint-count">0</span></div><div class="checkpoint-list" id="checkpoints"><span class="muted">Select a saved session to inspect undo history.</span></div></section>
+      <section class="inspector-section"><div class="section-heading"><h3>Token usage</h3><span class="state-label" id="usage-source">Not reported</span></div><dl class="data-list usage-list"><div><dt>Input</dt><dd id="usage-input">—</dd></div><div><dt>Output</dt><dd id="usage-output">—</dd></div><div><dt>Total</dt><dd id="usage-total">—</dd></div></dl><div class="context-label"><span>Context estimate</span><span id="context-estimate">—</span></div><div class="context-label"><span>Autocompact</span><span id="autocompact-line">—</span></div></section>
+      <section class="inspector-section" id="goal-section" hidden><div class="section-heading"><h3>Goal</h3><span class="state-label" id="goal-status"></span></div><p class="goal-condition" id="goal-text"></p><div class="goal-meta" id="goal-meta"></div><p class="goal-verdict" id="goal-verdict" hidden></p></section>
+      <section class="inspector-section"><div class="section-heading"><h3>Skills</h3><span class="muted" id="skill-count">0</span></div><div class="skill-list" id="skills"><span class="muted">No skills loaded</span></div></section>
+      <section class="inspector-section"><div class="section-heading"><h3>Health checks</h3><button class="icon-button" id="check-health" type="button" aria-label="Run health checks" title="Run checks"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#refresh-cw"></use></svg></button></div><div class="health-list" id="doctor"><span class="muted">Not checked</span></div></section>
+      <section class="inspector-section"><div class="section-heading"><h3>Gateway</h3><span class="state-label" id="gateway-label">Offline</span></div><div class="gateway-actions"><button class="button subtle" id="gateway-connect" type="button"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#wifi"></use></svg><span>Connect</span></button><button class="icon-button" id="gateway-ping" type="button" aria-label="Ping gateway" title="Ping gateway" disabled><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#radio"></use></svg></button><button class="icon-button" id="gateway-status" type="button" aria-label="Refresh runtime status" title="Refresh status"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#refresh-cw"></use></svg></button></div><div class="gateway-latency" id="gateway-latency">—</div></section>
+      <section class="inspector-section"><div class="section-heading"><h3>Channels</h3></div><dl class="data-list" id="channels"><div><dt>Dashboard</dt><dd>Local</dd></div></dl></section>
+    </aside>
+  </div>
+  <button class="drawer-backdrop" id="drawer-backdrop" type="button" aria-label="Close side panel" hidden></button>
+  <dialog class="settings-dialog" id="connection-dialog" aria-labelledby="connection-title">
+    <form id="connection-form"><div class="dialog-heading"><h2 id="connection-title">Connection</h2><button class="icon-button" id="connection-close" type="button" aria-label="Close connection settings"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#x"></use></svg></button></div><label class="form-field">Dashboard token<input id="gateway-token" type="password" placeholder="Dashboard token" autocomplete="off" spellcheck="false"></label><p class="form-note">Kept in this page only.</p><div id="connection-error" class="inline-error" role="alert" hidden></div><div class="dialog-actions"><button class="button subtle" id="clear-token" type="button">Clear token</button><button class="button primary" type="submit">Connect</button></div></form>
+  </dialog>
+  <dialog class="context-dialog" id="context-dialog" aria-labelledby="context-title"><form id="context-form"><div class="dialog-heading"><h2 id="context-title">Session context</h2><button class="icon-button" id="context-close" type="button" aria-label="Close context editor"><svg class="icon" aria-hidden="true"><use href="/assets/icons.svg#x"></use></svg></button></div><label class="form-field">Text messages<textarea id="context-input" rows="14" spellcheck="false"></textarea></label><p class="form-note">Text-only context. Applied at the next turn.</p><div class="inline-error" id="context-error" role="alert" hidden></div><div class="dialog-actions"><button class="button subtle" id="context-cancel" type="button">Cancel</button><button class="button primary" id="context-save" type="submit">Replace context</button></div></form></dialog>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <!-- 30-Day Rotating Password Protection Modal -->
+  <dialog class="auth-gate-dialog" id="auth-gate-modal">
+    <div class="auth-gate-card">
+      <div class="auth-gate-glow" aria-hidden="true"></div>
+      <div class="auth-gate-header">
+        <div class="auth-gate-mark-wrap">
+          <img src="/assets/mark.svg" alt="Varynth" width="48" height="48" class="auth-gate-mark">
+        </div>
+        <h2>Varynth Serve Gateway</h2>
+        <span class="auth-gate-badge">
+          <span class="bh-pulse-dot"></span>
+          <span>30-Day Protected</span>
+        </span>
+      </div>
+      <p class="auth-gate-desc">
+        Terminal access password required. Check the startup output in the terminal where <code>varynth serve</code> is running.
+      </p>
+      <form id="auth-gate-form">
+        <label class="auth-gate-label" for="auth-gate-password">Terminal Password</label>
+        <div class="auth-gate-input-row">
+          <svg class="icon small auth-gate-icon" aria-hidden="true"><use href="/assets/icons.svg#shield-check"></use></svg>
+          <input id="auth-gate-password" type="password" placeholder="e.g. vry-serve-..." autocomplete="current-password" required spellcheck="false">
+        </div>
+        <div id="auth-gate-error" class="inline-error" role="alert" style="margin-top: 8px; color: #f43f5e; font-size: 12px;" hidden></div>
+        <button id="auth-gate-submit" type="submit" class="button primary auth-gate-submit-btn">Unlock Serve Deck →</button>
+      </form>
+      <div class="auth-gate-footer">
+        <span>🔒 Rotates automatically every 30 days</span>
+        <a href="https://varynth.zuzia.dev/docs" target="_blank" rel="noreferrer">Documentation ↗</a>
+      </div>
+    </div>
+  </dialog>
+</body>
+</html>

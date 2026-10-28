@@ -1,0 +1,109 @@
+:root {
+  color-scheme: dark;
+  --space-3xs: 2px;
+  --space-2xs: 4px;
+  --space-xs: 8px;
+  --space-sm: 12px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 40px;
+  --space-2xl: 64px;
+  --space-3xl: 96px;
+  --space-4xl: 144px;
+  --text-xs: 0.8125rem;
+  --text-sm: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.5625rem;
+  --text-2xl: 1.953rem;
+  --text-3xl: 2.441rem;
+  --text-body: 1rem;
+  --text-small: 0.875rem;
+  --text-label: 0.8125rem;
+  --text-plan: 1.953rem;
+  --text-display-s: clamp(2.15rem, 3.6vw + 0.5rem, 3.45rem);
+  --text-display: clamp(2.75rem, 4.5vw + 1rem, 4.75rem);
+  --text-section: clamp(1.95rem, 2.4vw + 0.9rem, 3.15rem);
+  --text-stage: clamp(1.95rem, 2.4vw + 0.9rem, 3.15rem);
+  --text-title: clamp(1.18rem, 0.6vw + 0.85rem, 1.45rem);
+  --text-lead: clamp(1.08rem, 0.35vw + 0.96rem, 1.28rem);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-micro: 140ms;
+  --dur-short: 260ms;
+  --dur-fast: 140ms;
+  --dur-med: 260ms;
+  --dur-long: 560ms;
+  --color-error: oklch(72% 0.15 27);
+  --color-success: oklch(76% 0.13 150);
+  --container: 1380px;
+  --gutter: 56px;
+  --gap-columns: 32px;
+  --section-gap-s: 112px;
+  --section-gap: 136px;
+  --section-gap-l: 168px;
+  --z-base: 1;
+  --z-raised: 10;
+  --z-dropdown: 100;
+  --z-sticky: 200;
+  --z-sticky-nav: 300;
+  --z-modal: 400;
+  --z-toast: 500;
+  --z-tooltip: 600;
+
+  /* Deep Space Translucent Obsidian Surfaces for Black Hole Simulation */
+  --color-paper: oklch(10.5% 0.008 265);
+  --color-paper-2: oklch(14.5% 0.012 265 / 0.78);
+  --color-paper-3: oklch(10% 0.01 265 / 0.84);
+  --color-surface: oklch(14.5% 0.012 265 / 0.78);
+  --color-surface-elevated: oklch(19.5% 0.016 265 / 0.86);
+  --color-nav-bg: oklch(10.5% 0.01 265 / 0.82);
+  --color-ink: oklch(97% 0.005 265);
+  --color-ink-2: oklch(85% 0.008 265);
+  --color-muted: oklch(71% 0.012 265);
+  --color-subtle: oklch(58% 0.012 265);
+  --color-rule: oklch(28% 0.018 265 / 0.68);
+  --color-rule-2: oklch(38% 0.024 265 / 0.78);
+  --color-rule-strong: oklch(48% 0.03 265);
+
+  /* Varynth Dynamic Theme Tokens (Auto-cycled by BlackHoleBackground) */
+  --color-accent: oklch(78% 0.165 75);
+  --color-accent-hover: oklch(83% 0.155 78);
+  --color-accent-ink: oklch(13% 0.02 75);
+  --color-accent-soft: oklch(24% 0.055 75 / 0.75);
+  --color-focus: oklch(78% 0.165 75);
+  --color-cool: oklch(80% 0.13 75);
+  --color-cool-soft: oklch(23.5% 0.045 75 / 0.75);
+  --color-ok: oklch(77% 0.14 155);
+  --color-ok-soft: oklch(23% 0.035 155);
+  --color-bad: oklch(70% 0.17 25);
+  --color-bad-soft: oklch(24% 0.035 25);
+  --color-danger: oklch(70% 0.17 25);
+  --color-warn: oklch(78% 0.14 65);
+
+  /* Theme Swatch Tokens */
+  --swatch-magenta: oklch(71% 0.21 312);
+  --swatch-terracotta: oklch(73% 0.155 45);
+  --swatch-cyber: oklch(76% 0.145 230);
+  --swatch-emerald: oklch(75% 0.16 162);
+  --swatch-crimson: oklch(69% 0.19 28);
+
+  /* Crisp Geometric & Technical Typography Stack */
+  --font-display: var(--font-space), "Space Grotesk", "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-body: var(--font-inter), "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-serif: var(--font-space), "Space Grotesk", sans-serif;
+  --font-outlier: var(--font-jetbrains), "JetBrains Mono", ui-monospace, monospace;
+  --font-mono: var(--font-outlier);
+
+  --radius-card: 14px;
+  --radius-pill: 8px;
+  --radius-chip: 6px;
+  --radius-sm: 8px;
+  --radius-lg: 14px;
+  --rule-hair: 1px;
+  --rule-hairline: 1px;
+  --shadow-card: none;
+  --tracking-display: -0.032em;
+  --display-weight: 700;
+}
