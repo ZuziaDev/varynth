@@ -40,8 +40,7 @@ export default function DocsPage() {
               <p style={{ marginTop: "var(--space-xs)" }}>
                 One-line PowerShell bootstrapper using <code>Invoke-RestMethod</code> (
                 <code>irm</code>) piped to <code>Invoke-Expression</code> (<code>iex</code>).
-                Detects Node.js or Cargo automatically and installs the native{" "}
-                <code>varynth.exe</code> binary.
+                Downloads the pre-built <code>varynth.exe</code> binary directly and updates your user PATH.
               </p>
             </div>
             <div className="instrument-panel">
@@ -69,13 +68,13 @@ export default function DocsPage() {
           <article className="bento-card">
             <div>
               <div className="skill-top">
-                <h3 className="skill-title">Linux and macOS (curl | sh)</h3>
+                <h3 className="skill-title">Linux and macOS (curl | bash)</h3>
                 <span className="tag tag-free">posix</span>
               </div>
               <p style={{ marginTop: "var(--space-xs)" }}>
-                Standard POSIX shell bootstrapper for Ubuntu, Debian, Arch, Fedora, and macOS
-                (Apple Silicon &amp; Intel). Installs via global npm if available or builds a
-                release binary with Cargo.
+                Standard shell bootstrapper for Ubuntu, Debian, Arch, Fedora, and macOS
+                (Apple Silicon &amp; Intel). Downloads the pre-built Linux x86_64 binary to{" "}
+                <code>~/.local/bin/varynth</code> or builds via Cargo / npm.
               </p>
             </div>
             <div className="instrument-panel">
@@ -87,7 +86,7 @@ export default function DocsPage() {
                 <div className="term-line">
                   <span className="term-cool">$</span>
                   <span className="term-cmd">
-                    curl -fsSL https://varynth.zuzia.dev/install.sh | sh
+                    curl -fsSL https://varynth.zuzia.dev/install.sh | bash
                   </span>
                 </div>
                 <div className="term-line">

@@ -42,7 +42,7 @@ export default function HomePage() {
           </h2>
           <p className="claim">
             Switch between Windows PowerShell (<code>irm | iex</code>), Linux and macOS (
-            <code>curl | sh</code>), Node.js (<code>npm</code> / <code>pnpm</code> /{" "}
+            <code>curl | bash</code>), Node.js (<code>npm</code> / <code>pnpm</code> /{" "}
             <code>bun</code>), and native Rust Cargo compilation.
           </p>
         </div>

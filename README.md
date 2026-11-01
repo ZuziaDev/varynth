@@ -39,6 +39,11 @@ curl -fsSL https://varynth.zuzia.dev/install.sh | bash
 irm https://varynth.zuzia.dev/install.ps1 | iex
 ```
 
+### Direct Binary Downloads
+
+- **Linux (x86_64):** [`https://varynth.zuzia.dev/downloads/varynth-linux-amd64`](https://varynth.zuzia.dev/downloads/varynth-linux-amd64)
+- **Windows (x86_64):** [`https://varynth.zuzia.dev/downloads/varynth.exe`](https://varynth.zuzia.dev/downloads/varynth.exe)
+
 ---
 
 ## Quickstart

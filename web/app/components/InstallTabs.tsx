@@ -37,9 +37,9 @@ const METHODS: InstallMethod[] = [
   {
     id: "unix",
     label: "Linux & macOS",
-    badge: "curl | sh",
+    badge: "curl | bash",
     shell: "bash / zsh / POSIX sh (Linux & Apple Silicon / Intel macOS)",
-    primaryCmd: "curl -fsSL https://varynth.zuzia.dev/install.sh | sh",
+    primaryCmd: "curl -fsSL https://varynth.zuzia.dev/install.sh | bash",
     secondaryCmds: [
       {
         prompt: "$",
@@ -53,7 +53,7 @@ const METHODS: InstallMethod[] = [
       },
     ],
     description:
-      "Standard POSIX shell installer for Ubuntu, Debian, Arch, Fedora, and macOS. Installs via global npm if present or compiles an LTO-optimized native Rust binary to ~/.local/bin/varynth.",
+      "Standard shell installer for Ubuntu, Debian, Arch, Fedora, and macOS. Downloads the pre-built Linux x86_64 binary directly to ~/.local/bin/varynth or builds via Cargo / npm.",
   },
   {
     id: "node",
