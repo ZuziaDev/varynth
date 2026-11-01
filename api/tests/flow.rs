@@ -61,12 +61,12 @@ async fn public_login_catalog_and_chat_hide_upstream() {
         .expect("anon skills json");
     assert_eq!(anon_skills["tier"], "free");
     let anon_list = anon_skills["skills"].as_array().expect("skills list");
-    assert!(anon_list.len() >= 12, "expected at least 12 skills");
+    assert!(anon_list.len() >= 10, "expected at least 10 skills");
     let cu = anon_list.iter().find(|s| s["id"] == "computer-use").expect("computer-use");
     assert_eq!(cu["tier"], "free");
     assert_eq!(cu["unlocked"], true);
     assert!(cu["content"].is_string());
-    let mfp = anon_list.iter().find(|s| s["id"] == "motion-fream-pro").expect("motion-fream-pro");
+    let mfp = anon_list.iter().find(|s| s["id"] == "create-mcp").expect("create-mcp");
     assert_eq!(mfp["tier"], "pro");
     assert_eq!(mfp["unlocked"], false);
     assert!(mfp["content"].is_null());
@@ -271,7 +271,7 @@ async fn public_login_catalog_and_chat_hide_upstream() {
         .expect("pro skills json");
     assert_eq!(pro_skills["tier"], "pro");
     let pro_list = pro_skills["skills"].as_array().expect("pro skills list");
-    let mfp_pro = pro_list.iter().find(|s| s["id"] == "motion-fream-pro").expect("motion-fream-pro");
+    let mfp_pro = pro_list.iter().find(|s| s["id"] == "create-mcp").expect("create-mcp");
     assert_eq!(mfp_pro["tier"], "pro");
     assert_eq!(mfp_pro["unlocked"], true);
     assert!(mfp_pro["content"].is_string(), "pro content should be unlocked");

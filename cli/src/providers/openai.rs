@@ -38,7 +38,7 @@ impl OpenAiProvider {
         if key.is_none() && !varynth {
             anyhow::bail!("OpenAI API key missing");
         }
-        let refresh_varynth = key.as_ref().is_some_and(|value| {
+        let refresh_varynth = varynth || key.as_ref().is_some_and(|value| {
             std::env::var("VARYNTH_ACCESS_TOKEN").ok().as_ref() == Some(value)
         });
         Ok(Self {
@@ -59,12 +59,16 @@ impl OpenAiProvider {
 
     fn bearer(&self) -> Option<String> {
         if self.refresh_varynth {
-            std::env::var("VARYNTH_ACCESS_TOKEN")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-        } else {
-            self.key.clone()
+            if let Ok(Some(toks)) = crate::varynth_auth::load_auth_env() {
+                return Some(toks.access_token);
+            }
+            if let Ok(value) = std::env::var("VARYNTH_ACCESS_TOKEN") {
+                if !value.trim().is_empty() {
+                    return Some(value);
+                }
+            }
         }
+        self.key.clone()
     }
 
     fn chat_request(&self, url: &str, body: &Value) -> reqwest::RequestBuilder {

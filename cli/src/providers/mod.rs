@@ -103,7 +103,15 @@ fn build_single(cfg: &Config) -> Result<Box<dyn Provider>> {
                 cfg.openai_base_url =
                     Some(format!("{}/v1", cfg.varynth_api_url.trim_end_matches('/')));
             }
-            cfg.openai_api_key = None;
+            if cfg.openai_api_key.is_none() {
+                if let Ok(Some(toks)) = crate::varynth_auth::load_auth_env() {
+                    cfg.openai_api_key = Some(toks.access_token);
+                } else if let Ok(value) = std::env::var("VARYNTH_ACCESS_TOKEN") {
+                    if !value.trim().is_empty() {
+                        cfg.openai_api_key = Some(value);
+                    }
+                }
+            }
             Ok(Box::new(openai::OpenAiProvider::new(&cfg)?))
         }
         _ => bail!(

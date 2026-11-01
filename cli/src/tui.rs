@@ -1588,15 +1588,8 @@ async fn run_loop(
                 },
                 {
                     let mut names: Vec<String> = Vec::new();
-                    if let Some(mf) =
-                        g.0.skills
-                            .iter()
-                            .find(|s| s.name.eq_ignore_ascii_case("motion-frames") || s.name.eq_ignore_ascii_case("motion-fream"))
-                    {
-                        names.push(mf.name.clone());
-                    }
                     for skill in &g.0.skills {
-                        if !skill.name.eq_ignore_ascii_case("motion-frames") && !skill.name.eq_ignore_ascii_case("motion-fream") {
+                        if !skill.name.eq_ignore_ascii_case("motion-frames") && !skill.name.eq_ignore_ascii_case("motion-fream") && !skill.name.eq_ignore_ascii_case("motion-fream-pro") {
                             names.push(skill.name.clone());
                         }
                     }
@@ -4807,7 +4800,7 @@ fn empty_session_lines(meta: &ChatMeta<'_>, width: usize) -> Vec<Line<'static>> 
 
     let mut skill_spans = vec![Span::styled(format!("{last_prefix}Skills:    "), dim)];
     if meta.skills.is_empty() {
-        skill_spans.push(Span::styled("$motion-fream", Palette::pill_skill_style()));
+        skill_spans.push(Span::styled("$create-skill", Palette::pill_skill_style()));
         skill_spans.push(Span::raw("  "));
         skill_spans.push(Span::styled("$refactor", Palette::pill_skill_style()));
         skill_spans.push(Span::raw("  "));
@@ -4815,16 +4808,11 @@ fn empty_session_lines(meta: &ChatMeta<'_>, width: usize) -> Vec<Line<'static>> 
         skill_spans.push(Span::styled("  (none installed)", dim));
     } else {
         let mut ordered: Vec<&String> = Vec::with_capacity(meta.skills.len());
-        if let Some(mf) = meta.skills.iter().find(|s| {
-            let n = s.trim_start_matches('$');
-            n.eq_ignore_ascii_case("motion-frames") || n.eq_ignore_ascii_case("motion-fream")
-        }) {
-            ordered.push(mf);
-        }
         for s in meta.skills {
             let n = s.trim_start_matches('$');
             if !n.eq_ignore_ascii_case("motion-frames")
                 && !n.eq_ignore_ascii_case("motion-fream")
+                && !n.eq_ignore_ascii_case("motion-fream-pro")
             {
                 ordered.push(s);
             }
@@ -6001,7 +5989,7 @@ impl ModelBrowser {
                 set.insert("google".into());
             }
             for p in &cfg.provider_profiles {
-                if p.enabled {
+                if p.enabled && (p.api_key_env.as_deref() != Some("VARYNTH_ACCESS_TOKEN") || p.id == "varynth") {
                     set.insert(p.id.to_ascii_lowercase());
                 }
             }
@@ -6012,7 +6000,7 @@ impl ModelBrowser {
             if id.trim().is_empty() || !seen.insert(id.clone()) {
                 return;
             }
-            let provider = infer_provider(&id, owned_by.as_deref(), &cfg.provider);
+            let provider = infer_provider(&id, owned_by.as_deref(), &cfg.provider, &connected_providers);
             let kind = infer_model_kind(&id);
             let (context, pricing) = infer_model_specs(&id, kind);
             let connected = connected_providers.contains(&provider.to_ascii_lowercase());
@@ -6042,19 +6030,45 @@ impl ModelBrowser {
             push_model(cfg.model.clone(), None);
         }
 
+        let role_models = [
+            cfg.roles.default.as_deref(),
+            cfg.roles.plan.as_deref(),
+            cfg.roles.smol.as_deref(),
+            cfg.roles.advisor.as_deref(),
+            cfg.roles.widget.as_deref(),
+            cfg.roles.memory.as_deref(),
+            cfg.roles.fallback.as_deref(),
+        ];
+        for rm in role_models.into_iter().flatten() {
+            if !rm.trim().is_empty() {
+                push_model(rm.to_string(), None);
+            }
+        }
+
         let mut prov_counts: HashMap<String, (usize, bool)> = HashMap::new();
         for row in &all_models {
-            let entry = prov_counts
-                .entry(row.provider.clone())
-                .or_insert((0, row.connected));
-            entry.0 += 1;
-            entry.1 |= row.connected;
+            if connected_providers.contains(&row.provider.to_ascii_lowercase()) {
+                let entry = prov_counts
+                    .entry(row.provider.clone())
+                    .or_insert((0, row.connected));
+                entry.0 += 1;
+                entry.1 |= row.connected;
+            }
         }
         let mut providers: Vec<(String, usize, bool)> = prov_counts
             .into_iter()
             .map(|(k, (c, conn))| (k, c, conn))
             .collect();
-        providers.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+        let active_lower = cfg.provider.to_ascii_lowercase();
+        providers.sort_by(|a, b| {
+            let a_is_active = a.0.to_ascii_lowercase() == active_lower;
+            let b_is_active = b.0.to_ascii_lowercase() == active_lower;
+            b_is_active
+                .cmp(&a_is_active)
+                .then_with(|| (b.0.to_ascii_lowercase() == "varynth").cmp(&(a.0.to_ascii_lowercase() == "varynth")))
+                .then_with(|| b.2.cmp(&a.2))
+                .then_with(|| a.0.cmp(&b.0))
+        });
 
         let mut b = Self {
             all_models,
@@ -6243,37 +6257,63 @@ impl ModelBrowser {
     }
 }
 
-fn infer_provider(id: &str, owned_by: Option<&str>, fallback: &str) -> String {
+fn infer_provider(
+    id: &str,
+    owned_by: Option<&str>,
+    fallback: &str,
+    valid_providers: &HashSet<String>,
+) -> String {
     if id.starts_with("varynth/")
         || crate::varynth_catalog::DEFAULT_PUBLIC_MODELS.contains(&id)
     {
         return "varynth".into();
     }
-    if let Some( rest) = id.strip_prefix("@cf/") {
+    if let Some(rest) = id.strip_prefix("@cf/") {
         if let Some((vendor, _)) = rest.split_once('/') {
-            return format!("cf/{vendor}");
+            let cf_vendor = format!("cf/{vendor}");
+            if valid_providers.contains(&cf_vendor.to_ascii_lowercase()) {
+                return cf_vendor;
+            }
         }
-        return "cloudflare".into();
+        if valid_providers.contains("cloudflare") {
+            return "cloudflare".into();
+        }
+        return fallback.to_string();
     }
     if let Some((prefix, _)) = id.split_once('/') {
-        return prefix.to_string();
+        let prefix_lower = prefix.to_ascii_lowercase();
+        if valid_providers.contains(&prefix_lower) {
+            return prefix.to_string();
+        }
+        // If the prefix is an unconfigured vendor (e.g. microsoft/phi-3, meta-llama/Llama-3),
+        // do NOT treat it as a separate provider! It belongs to the added provider (fallback).
+        return fallback.to_string();
     }
     if let Some((prefix, _)) = id.split_once(':') {
-        return prefix.to_string();
+        let prefix_lower = prefix.to_ascii_lowercase();
+        if valid_providers.contains(&prefix_lower) {
+            return prefix.to_string();
+        }
+        return fallback.to_string();
     }
     if let Some(owner) = owned_by.filter(|s| !s.trim().is_empty()) {
-        return owner.to_string();
+        let owner_lower = owner.to_ascii_lowercase();
+        if valid_providers.contains(&owner_lower) {
+            return owner.to_string();
+        }
     }
     let lower = id.to_ascii_lowercase();
-    if lower.contains("claude") {
+    if lower.contains("claude") && valid_providers.contains("anthropic") {
         "anthropic".into()
-    } else if lower.contains("gpt") || lower.starts_with("o1") || lower.starts_with("o3") {
+    } else if (lower.contains("gpt") || lower.starts_with("o1") || lower.starts_with("o3"))
+        && valid_providers.contains("openai")
+    {
         "openai".into()
-    } else if lower.contains("gemini") {
+    } else if lower.contains("gemini") && valid_providers.contains("google") {
         "google".into()
-    } else if lower.contains("grok") {
+    } else if lower.contains("grok") && valid_providers.contains("xai") {
         "xai".into()
-    } else if lower.contains("deepseek") {
+    } else if lower.contains("deepseek") && valid_providers.contains("deepseek") {
         "deepseek".into()
     } else {
         fallback.to_string()

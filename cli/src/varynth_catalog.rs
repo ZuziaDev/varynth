@@ -139,44 +139,12 @@ fn model_suffixes(body: &serde_json::Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn apply_catalog(cfg: &mut Config, catalog: &serde_json::Value) {
-    let mut keep = HashSet::new();
-    keep.insert("varynth".to_string());
-    let Some(providers) = catalog.get("providers").and_then(|v| v.as_array()) else {
-        return;
-    };
-    for provider in providers {
-        let Some(id) = provider.get("id").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        if id == "varynth" || id == "cloudflare" {
-            continue;
-        }
-        let kind = provider
-            .get("kind")
-            .and_then(|v| v.as_str())
-            .unwrap_or("openai");
-        let kind = if kind == "anthropic" {
-            "anthropic"
-        } else {
-            "openai"
-        };
-        let name = provider.get("name").and_then(|v| v.as_str()).unwrap_or(id);
-        let models = provider
-            .get("models")
-            .and_then(|v| v.as_array())
-            .map(|rows| {
-                rows.iter()
-                    .filter_map(|row| row.get("id").and_then(|id| id.as_str()).map(str::to_string))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        if upsert(cfg, id, name, kind, models, true) {
-            keep.insert(id.to_string());
-        }
-    }
+fn apply_catalog(cfg: &mut Config, _catalog: &serde_json::Value) {
+    // Purge any auto-created vendor profiles tied to VARYNTH_ACCESS_TOKEN.
+    // All Varynth upstream models belong natively under the "varynth" provider profile!
+    // We must NOT pollute the user's config with phantom vendor profiles (microsoft, google, meta, ibm, etc.)
     cfg.provider_profiles.retain(|profile| {
-        profile.api_key_env.as_deref() != Some("VARYNTH_ACCESS_TOKEN") || keep.contains(&profile.id)
+        profile.api_key_env.as_deref() != Some("VARYNTH_ACCESS_TOKEN") || profile.id == "varynth"
     });
 }
 
@@ -278,6 +246,13 @@ pub fn apply_skills_catalog(catalog: &serde_json::Value) {
             }
         } else if marker.exists() {
             let _ = std::fs::remove_dir_all(&skill_dir);
+        }
+    }
+
+    for banned in ["motion-fream", "motion-fream-pro", "motion-frames", "motion-frames-pro"] {
+        let bdir = skills_root.join(banned);
+        if bdir.exists() {
+            let _ = std::fs::remove_dir_all(&bdir);
         }
     }
 

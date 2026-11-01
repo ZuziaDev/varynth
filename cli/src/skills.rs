@@ -312,23 +312,7 @@ pub fn expand_user_skill_prompt(skills: &[Skill], user: &str) -> Option<String> 
     None
 }
 
-const MOTION_FRAMES_STARTER_BODY: &str = "\
-Author a self-contained deterministic HTML composition (`window.__VIDEO_CONFIG__ = { width: 1920, height: 1080, fps: 60, durationSeconds: 5 }`, `window.seekTo(timeMs)`, `window.renderFrame(frame, fps)`) based on HeyGen Hyperframes architecture where every visual frame is a pure function of `tSec = frame / fps`. \
-Animate only GPU compositor properties (`transform: translate3d/scale/rotateX/Y/Z`, `opacity`, `filter`, `clip-path`) using exact Newton-Raphson `cubicBezier` easing (`snappyOut: cubic-bezier(0.16, 1, 0.3, 1)`, `editorialInOut: cubic-bezier(0.7, 0, 0.2, 1)`) and analytical damped `spring(t, { response, damping })` physics. \
-Render frame-by-frame in Headless Chromium (Playwright) and pipe lossless PNG buffers (`image2pipe`) into `ffmpeg` (`-c:v libx264 -crf 16 -pix_fmt yuv420p -movflags +faststart`): \
-`node .agents/skills/motion-frames/scripts/render.mjs ./scene.html --out ./output.mp4 --fps 60 --duration 5 --width 1920 --height 1080 --scale 2`.";
-
 const STARTERS: &[(&str, &str, &str)] = &[
-    (
-        "motion-frames",
-        "Deterministic frame-by-frame HTML/CSS/Canvas/WebGL motion graphics & 60fps launch video generator with HeyGen Hyperframes architecture (Playwright + FFmpeg).",
-        MOTION_FRAMES_STARTER_BODY,
-    ),
-    (
-        "motion-fream",
-        "Deterministic frame-by-frame HTML/CSS/Canvas motion graphics & 60fps launch video generator (Playwright + FFmpeg).",
-        MOTION_FRAMES_STARTER_BODY,
-    ),
     (
         "varynth-workspace",
         "Çalışma alanı",
@@ -486,36 +470,36 @@ mod tests {
     }
 
     #[test]
-    fn starter_skills_include_motion_fream_and_resolve_slash_or_dollar_invocations() {
+    fn starter_skills_include_workspace_and_resolve_slash_or_dollar_invocations() {
         let dir = tempfile::tempdir().unwrap();
         install_starter_skills(dir.path()).unwrap();
         let mut skills = Vec::new();
         let mut budget = MAX_TOTAL_SKILL_BYTES;
         walk_skills(dir.path(), &mut skills, &mut budget);
 
-        let mf = load_named(&skills, "motion-fream").expect("motion-fream starter must exist");
+        let mf = load_named(&skills, "varynth-workspace").expect("varynth-workspace starter must exist");
         assert!(frontmatter_span(&mf.body).is_some());
         assert_eq!(
-            load_named(&skills, "/motion-fream").map(|s| s.name.as_str()),
-            Some("motion-fream")
+            load_named(&skills, "/varynth-workspace").map(|s| s.name.as_str()),
+            Some("varynth-workspace")
         );
         assert_eq!(
-            load_named(&skills, "$motion-fream").map(|s| s.name.as_str()),
-            Some("motion-fream")
+            load_named(&skills, "$varynth-workspace").map(|s| s.name.as_str()),
+            Some("varynth-workspace")
         );
 
         let slash_expanded =
-            expand_user_skill_prompt(&skills, "/motion-fream build a 5s launch video").unwrap();
-        assert!(slash_expanded.contains("The user invoked skill /motion-fream."));
+            expand_user_skill_prompt(&skills, "/varynth-workspace refactor routes").unwrap();
+        assert!(slash_expanded.contains("The user invoked skill /varynth-workspace."));
 
         let dollar_lead =
-            expand_user_skill_prompt(&skills, "$motion-fream bana 5 saniyelik bir video yap")
+            expand_user_skill_prompt(&skills, "$varynth-workspace proje yapısını incele")
                 .unwrap();
-        assert!(dollar_lead.contains("The user invoked skill $motion-fream."));
+        assert!(dollar_lead.contains("The user invoked skill $varynth-workspace."));
 
         let dollar_inline =
-            expand_user_skill_prompt(&skills, "bana $motion-fream, ile animasyon yap").unwrap();
-        assert!(dollar_inline.contains("The user invoked skill $motion-fream."));
+            expand_user_skill_prompt(&skills, "bana $varynth-workspace, ile özet çıkar").unwrap();
+        assert!(dollar_inline.contains("The user invoked skill $varynth-workspace."));
 
         assert!(expand_user_skill_prompt(&skills, "/goal finish tests").is_none());
     }

@@ -78,14 +78,14 @@ export default async function PricingPage() {
             const extraFeatures = isPro
               ? [
                   "Access to 146 Pro Models (Claude Opus 4.8/4.7, Sonnet 5/4.6, GPT-5.6 Luna/Terra, DeepSeek V4.1, Gemini 3.5, Grok 4.3, Flux Ultra)",
-                  "All 6 Pro Agent Skills (motion-frames-pro, create-mcp, security-auditor, and more)",
+                  "Pro Agent Skills (create-mcp, create-plugin, fullstack-architect, generative-ui-pro, security-auditor)",
                   "Flux image synthesis (/v1/images/generations) via built-in generate_image tool",
                   "Automated SKILL.md synchronization to ~/.varynth/skills/ on varynth login",
-                  "OpenClaw Telegram remote gateway & 60fps Playwright/FFmpeg video pipeline",
+                  "OpenClaw Telegram remote gateway & multi-agent runtime",
                 ]
               : [
                   "Access to 21 Free Models (GPT-OSS 120B/20B, Qwen 3.8/30B, Llama 4 Scout, Llama 3.3 70B, Gemma 4, GLM 4.7 Flash, DeepSeek R1 Distill)",
-                  "6 Core Agent Skills (computer-use, motion-frames, cli-design, and more)",
+                  "Core Agent Skills (computer-use, cli-design, backend-core, ui-foundations, create-skill)",
                   "Full 7-role /model routing and Obsidian .varynth/MEMORY/ vault",
                   "Unmetered custom endpoints via varynth endpoint add",
                 ];

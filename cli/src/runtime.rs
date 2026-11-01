@@ -718,6 +718,9 @@ impl Runtime {
             .iter()
             .filter(|profile| profile.enabled)
         {
+            if profile.api_key_env.as_deref() == Some("VARYNTH_ACCESS_TOKEN") && profile.id != "varynth" {
+                continue;
+            }
             for model in &profile.models {
                 let id = format!("{}/{model}", profile.id);
                 if seen.insert(id.clone()) {

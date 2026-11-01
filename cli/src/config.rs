@@ -723,7 +723,13 @@ impl Config {
             }
         }
         if profile.id == "varynth" {
-            key = None;
+            if key.is_none() {
+                if let Ok(Some(toks)) = crate::varynth_auth::load_auth_env() {
+                    key = Some(toks.access_token);
+                } else if let Ok(value) = std::env::var("VARYNTH_ACCESS_TOKEN") {
+                    key = (!value.trim().is_empty()).then_some(value);
+                }
+            }
         }
         match profile.kind.as_str() {
             "proxy" => cfg.proxy_token = key,

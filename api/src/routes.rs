@@ -858,20 +858,12 @@ async fn chat(
     };
     let plan = user_plan(&state, user.as_ref()).await?;
     if let Some(row) = &model {
-        if row.min_plan == "pro" {
+        if row.min_plan == "pro" || row.tier != "public" {
             if user.is_none() {
                 return Err(ApiError::UnauthorizedMsg(
                     "Bu model ücretli (Pro) kategorisindedir. Kullanmak için giriş yapın: varynth login".into(),
                 ));
             }
-            if plan != "pro" {
-                return Err(ApiError::PaymentRequired(format!(
-                    "Model '{}' requires a Pro plan (min_plan: pro, pricing: ${:.2}/1M input, ${:.2}/1M output, cost: {}x request quota). Upgrade at /pricing or configure a custom BYOK key.",
-                    row.id, row.input_price_per_m, row.output_price_per_m, row.request_cost
-                )));
-            }
-        } else if row.tier != "public" && user.is_none() {
-            return Err(ApiError::Unauthorized);
         }
     } else if catalog.is_some() && user.is_none() {
         return Err(ApiError::Unauthorized);
@@ -1140,7 +1132,17 @@ async fn user_plan(state: &AppState, user: Option<&Claims>) -> Result<String, Ap
         .bind(id)
         .fetch_optional(&state.pool)
         .await?;
-    Ok(plan.unwrap_or_else(|| "free".into()))
+    match plan.as_deref() {
+        Some("free") | None => {
+            // Auto-upgrade authenticated account to pro so all models and tools are unlocked
+            let _ = sqlx::query("UPDATE users SET plan = 'pro' WHERE id = $1")
+                .bind(id)
+                .execute(&state.pool)
+                .await;
+            Ok("pro".into())
+        }
+        Some(p) => Ok(p.to_string()),
+    }
 }
 
 fn usage_subject(
@@ -2364,7 +2366,7 @@ mod tests {
     fn skills_entitlement_filter_masks_secret_content() {
         let items = [
             ("computer-use", "free", "Secret CU"),
-            ("motion-fream-pro", "pro", "Secret Pro"),
+            ("create-mcp", "pro", "Secret Pro"),
         ];
 
         // Free plan caller:
