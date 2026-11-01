@@ -36,7 +36,7 @@ pub async fn prepare(pool: &PgPool, cfg: &Config) -> Result<(), sqlx::Error> {
             .execute(pool)
             .await?;
         }
-        if cfg.openai_key.is_none() {
+        if cfg.openai_key.is_none() && cfg.hrmn_api_key.is_none() {
             sqlx::query("DELETE FROM provider_models WHERE model_id = 'gpt-4o-mini'")
                 .execute(pool)
                 .await?;

@@ -988,11 +988,14 @@ export function DashboardConsole({
                         value={selectedModel}
                         onChange={(e) => setSelectedModel(e.target.value)}
                       >
-                        {models.map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.id} — {m.display_name} ({m.owned_by})
-                          </option>
-                        ))}
+                        {models.map((m) => {
+                          const free = m.min_plan === "free" || m.pricing?.is_free;
+                          return (
+                            <option key={m.id} value={m.id}>
+                              [{free ? "FREE" : "PRO"}] {m.id} — {m.display_name} {free ? "($0/1M)" : `($${m.pricing?.input_per_m ?? 0}/$${m.pricing?.output_per_m ?? 0})`}
+                            </option>
+                          );
+                        })}
                       </select>
                     </div>
 
@@ -1537,11 +1540,14 @@ export function DashboardConsole({
                         setRoleMap((prev) => ({ ...prev, [r.role]: e.target.value }))
                       }
                     >
-                      {models.map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.id} ({m.display_name})
-                        </option>
-                      ))}
+                      {models.map((m) => {
+                        const free = m.min_plan === "free" || m.pricing?.is_free;
+                        return (
+                          <option key={m.id} value={m.id}>
+                            [{free ? "FREE" : "PRO"}] {m.id} ({m.display_name})
+                          </option>
+                        );
+                      })}
                     </select>
                   </div>
                 ))}

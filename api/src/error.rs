@@ -7,8 +7,12 @@ use serde_json::json;
 pub enum ApiError {
     #[error("unauthorized")]
     Unauthorized,
+    #[error("unauthorized")]
+    UnauthorizedMsg(String),
     #[error("forbidden")]
     Forbidden(String),
+    #[error("payment required")]
+    PaymentRequired(String),
     #[error("bad request")]
     BadRequest(String),
     #[error("not found")]
@@ -42,10 +46,20 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, message, kind) = match &self {
             Self::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".to_string(), "auth"),
+            Self::UnauthorizedMsg(message) => (
+                StatusCode::UNAUTHORIZED,
+                message.clone(),
+                "auth",
+            ),
             Self::Forbidden(message) => (
                 StatusCode::FORBIDDEN,
                 message.clone(),
                 "forbidden",
+            ),
+            Self::PaymentRequired(message) => (
+                StatusCode::PAYMENT_REQUIRED,
+                message.clone(),
+                "payment_required",
             ),
             Self::BadRequest(message) => (
                 StatusCode::BAD_REQUEST,

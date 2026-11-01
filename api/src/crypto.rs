@@ -121,6 +121,7 @@ pub fn scrub_upstream_error(body: &str) -> String {
         || lower.contains("workers")
         || body.contains("@cf/")
         || lower.contains("api.cloudflare.com")
+        || lower.contains("hrmn")
     {
         return "upstream request failed".into();
     }
@@ -144,6 +145,8 @@ pub fn public_json_is_clean(body: &str) -> bool {
         && !lower.contains("workers")
         && !body.contains("@cf/")
         && !lower.contains("api.cloudflare.com")
+        && !lower.contains("api.hrmn.tr")
+        && !lower.contains("hrmnapi")
         && !lower.contains("upstream_model")
         && !lower.contains("upstream_base_url")
 }

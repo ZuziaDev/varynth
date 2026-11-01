@@ -40,7 +40,7 @@ export default async function ModelsPage() {
           Models, role routing, and <span className="serif-accent">agent skills.</span>
         </h1>
         <p className="claim">
-          {publicModels.length > 0 ? publicModels.length : 21} live verified upstream models across
+          {publicModels.length > 0 ? publicModels.length : 167} live verified upstream models (21 Free + 146 Pro) across
           Flagship Reasoning, Coding, Vision &amp; Multimodal Chat, and Low-Latency Tool Execution,
           plus 7 cognitive role bindings and the tiered skills library.
         </p>

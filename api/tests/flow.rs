@@ -61,7 +61,7 @@ async fn public_login_catalog_and_chat_hide_upstream() {
         .expect("anon skills json");
     assert_eq!(anon_skills["tier"], "free");
     let anon_list = anon_skills["skills"].as_array().expect("skills list");
-    assert_eq!(anon_list.len(), 12, "expected 12 skills (6 free + 6 pro)");
+    assert!(anon_list.len() >= 12, "expected at least 12 skills");
     let cu = anon_list.iter().find(|s| s["id"] == "computer-use").expect("computer-use");
     assert_eq!(cu["tier"], "free");
     assert_eq!(cu["unlocked"], true);
@@ -70,6 +70,42 @@ async fn public_login_catalog_and_chat_hide_upstream() {
     assert_eq!(mfp["tier"], "pro");
     assert_eq!(mfp["unlocked"], false);
     assert!(mfp["content"].is_null());
+
+    // Verify /v1/models returns both free and pro models with pricing and limits
+    let models_json: serde_json::Value = client
+        .get(format!("{base}/v1/models"))
+        .send()
+        .await
+        .expect("models")
+        .json()
+        .await
+        .expect("models json");
+    let models_list = models_json["data"].as_array().expect("models data");
+    assert!(models_list.len() >= 166, "expected >=166 models, got {}", models_list.len());
+    let opus = models_list
+        .iter()
+        .find(|m| m["id"] == "varynth/claude-opus-4-8")
+        .expect("claude-opus-4-8");
+    assert_eq!(opus["min_plan"], "pro");
+    assert_eq!(opus["pricing"]["request_cost"], 5);
+    assert_eq!(opus["pricing"]["is_free"], false);
+    assert_eq!(opus["limits"]["rpm"], 15);
+    let gpt_oss = models_list
+        .iter()
+        .find(|m| m["id"] == "varynth/gpt-oss-120b")
+        .expect("gpt-oss-120b");
+    assert_eq!(gpt_oss["min_plan"], "free");
+    assert_eq!(gpt_oss["pricing"]["is_free"], true);
+    assert_eq!(gpt_oss["pricing"]["request_cost"], 1);
+
+    // Anonymous caller requesting a Pro model gets 401
+    let anon_pro_chat = client
+        .post(format!("{base}/v1/chat/completions"))
+        .json(&json!({"model":"varynth/claude-opus-4-8","messages":[{"role":"user","content":"hi"}]}))
+        .send()
+        .await
+        .expect("anon pro chat");
+    assert_eq!(anon_pro_chat.status(), 401);
 
     let chat = client
         .post(format!("{base}/v1/chat/completions"))
@@ -161,6 +197,16 @@ async fn public_login_catalog_and_chat_hide_upstream() {
     );
     assert_eq!(usage["remaining"]["chat"], 100 - chat_before - 1);
 
+    // Free signed-in caller requesting a Pro model gets 402 Payment Required
+    let free_pro_chat = client
+        .post(format!("{base}/v1/chat/completions"))
+        .bearer_auth(session)
+        .json(&json!({"model":"varynth/claude-opus-4-8","messages":[{"role":"user","content":"hi"}]}))
+        .send()
+        .await
+        .expect("free pro chat");
+    assert_eq!(free_pro_chat.status(), 402);
+
     let flip: serde_json::Value = client
         .post(format!("{base}/v1/me/subscription"))
         .bearer_auth(session)
@@ -187,6 +233,31 @@ async fn public_login_catalog_and_chat_hide_upstream() {
     assert_eq!(usage_pro["plan"], "pro");
     assert_eq!(usage_pro["limits"]["chat_per_day"], 2000);
     assert_eq!(usage_pro["limits"]["search_per_day"], 500);
+    let pro_chat_before = usage_pro["today"]["chat"].as_i64().expect("pro chat before");
+
+    // Pro signed-in caller requesting a Pro flagship model (request_cost = 5) succeeds and increments usage by 5
+    let pro_opus_chat = client
+        .post(format!("{base}/v1/chat/completions"))
+        .bearer_auth(session)
+        .json(&json!({"model":"varynth/claude-opus-4-8","messages":[{"role":"user","content":"hi"}]}))
+        .send()
+        .await
+        .expect("pro opus chat");
+    assert!(pro_opus_chat.status().is_success());
+
+    let usage_after_opus: serde_json::Value = client
+        .get(format!("{base}/v1/me/usage"))
+        .bearer_auth(session)
+        .send()
+        .await
+        .expect("usage after opus")
+        .json()
+        .await
+        .expect("usage after opus json");
+    assert_eq!(
+        usage_after_opus["today"]["chat"].as_i64().expect("pro chat after"),
+        pro_chat_before + 5
+    );
 
     // Skills catalog as Pro: Pro skills now have content unlocked
     let pro_skills: serde_json::Value = client

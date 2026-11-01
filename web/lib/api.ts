@@ -33,7 +33,26 @@ export type Usage = {
 
 export type Me = { id: string; email: string };
 
-export type PublicModel = { id: string; display_name: string; owned_by: string };
+export type PublicModel = {
+  id: string;
+  display_name: string;
+  owned_by: string;
+  tier?: "public" | "account";
+  min_plan?: "free" | "pro";
+  category?: "reasoning" | "coding" | "vision" | "fast" | "image";
+  pricing?: {
+    input_per_m: number;
+    output_per_m: number;
+    currency: string;
+    is_free: boolean;
+    request_cost: number;
+  };
+  limits?: {
+    rpm: number;
+    rpd: number;
+    request_cost: number;
+  };
+};
 
 export type CatalogProvider = {
   id: string;

@@ -10,7 +10,7 @@ export default function HomePage() {
               The model is <span className="serif-accent">already there.</span>
             </h1>
             <p className="claim">
-              21 live verified Chat, Coding, Reasoning, and Vision models plus Flux Image Synthesis
+              167 live verified Chat, Coding, Reasoning, and Vision models (21 Free + 146 Pro) plus Flux Image Synthesis
               and Multi-Engine Web Search compiled into one sovereign Rust binary. Scroll with your
               mouse wheel to warp the singularity horizon.
             </p>
@@ -23,7 +23,7 @@ export default function HomePage() {
                 Installation and docs
               </a>
               <a className="btn-quiet" href="/models">
-                Explore 21 verified models &amp; skills
+                Explore 167 verified models &amp; skills
               </a>
               <a className="btn-quiet" href="/pricing">
                 View plans
@@ -64,7 +64,7 @@ export default function HomePage() {
         <div className="bento-grid" data-slot="bento-grid" data-kind="product">
           <article className="bento-card span-2">
             <div>
-              <h3>21 verified public models ready on launch</h3>
+              <h3>21 Free public models ready on launch (+ 146 Pro models)</h3>
               <p>
                 GPT-OSS 120B, Qwen 3.8 27B, Nemotron 3 120B, DeepSeek R1 Distill 32B, QwQ 32B,
                 Llama 4 Scout, Llama 3.3 70B, Gemma 4 26B, and GLM 4.7 Flash served directly from
@@ -134,8 +134,8 @@ export default function HomePage() {
               Open and code <span className="serif-accent">immediately.</span>
             </h2>
             <p className="claim">
-              21 verified public models fetched from <code>/v1/models/public</code> with no
-              registration required. Resume any interrupted terminal session with{" "}
+              167 models (21 Free + 146 Pro) fetched from <code>/v1/models</code> with no
+              registration required for Free models. Resume any interrupted terminal session with{" "}
               <code>varynth resume &lt;session-id&gt;</code>.
             </p>
           </div>
@@ -213,7 +213,7 @@ export default function HomePage() {
             Read installation docs
           </a>
           <a className="btn-quiet" href="/models">
-            Browse 21 models &amp; skills
+            Browse 167 models &amp; skills
           </a>
           <a className="btn-quiet" href="/login">
             Sign in

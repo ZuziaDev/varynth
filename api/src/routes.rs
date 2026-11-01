@@ -29,8 +29,9 @@ use crate::byok::{
     ByokUpstream,
 };
 use crate::chat::{
-    anthropic_body, anthropic_to_openai, completion_to_sse, prepare_upstream_body, resolve_dispatch,
-    rewrite_model, rewrite_sse, scrubbed_error, stub_completion, CatalogModel, Dispatch, ModelRow,
+    anthropic_body, anthropic_to_openai, completion_to_sse, list_all_enabled_models, model_to_json,
+    prepare_upstream_body, resolve_dispatch, rewrite_model, rewrite_sse, scrubbed_error,
+    stub_completion, CatalogModel, Dispatch, ModelRow, MODEL_SELECT_COLUMNS,
 };
 use crate::config::{canonical_ip, Config};
 use crate::crypto::{
@@ -40,7 +41,10 @@ use crate::crypto::{
 };
 use crate::crypto::Claims;
 use crate::error::ApiError;
-use crate::limits::{consume, consume_message, day_bucket, minute_bucket, quota, AuthLimiter, Quota};
+use crate::limits::{
+    check_and_bump_weighted, consume, consume_message, day_bucket, minute_bucket, quota,
+    AuthLimiter, Quota,
+};
 use crate::search::{self, hits_json, SearchCursors};
 
 #[derive(Clone)]
@@ -188,16 +192,8 @@ async fn public_models(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
-    let rows = sqlx::query_as::<_, ModelRow>(
-        "SELECT id, display_name, tier, upstream_kind, upstream_model, upstream_base_url, enabled
-         FROM models WHERE tier = 'public' AND enabled = true ORDER BY sort_order, id",
-    )
-    .fetch_all(&state.pool)
-    .await?;
-    let mut data: Vec<Value> = rows
-        .into_iter()
-        .map(|row| json!({"id": row.id, "display_name": row.display_name, "owned_by": "varynth"}))
-        .collect();
+    let rows = list_all_enabled_models(&state.pool).await?;
+    let mut data: Vec<Value> = rows.iter().map(model_to_json).collect();
 
     if let Ok(Some(claims)) = optional_user(&state, &headers).await {
         if let Ok(uid) = parse_user(&claims.sub) {
@@ -278,18 +274,48 @@ async fn catalog(
     )
     .fetch_all(&state.pool)
     .await?;
+    let all_models = list_all_enabled_models(&state.pool).await?;
     let data: Vec<Value> = providers
         .into_iter()
         .map(|(id, name, kind)| {
             let owned: Vec<Value> = models
                 .iter()
                 .filter(|(provider, _, _)| provider == &id)
-                .map(|(_, model_id, display)| json!({"id": model_id, "name": display}))
+                .map(|(_, model_id, display)| {
+                    let varynth_id = format!("varynth/{model_id}");
+                    if let Some(m) = all_models.iter().find(|r| r.id == varynth_id || r.upstream_model == *model_id) {
+                        let is_free = m.min_plan == "free" || (m.input_price_per_m == 0.0 && m.output_price_per_m == 0.0);
+                        json!({
+                            "id": model_id,
+                            "varynth_id": m.id,
+                            "name": display,
+                            "display_name": m.display_name,
+                            "tier": m.tier,
+                            "min_plan": m.min_plan,
+                            "category": m.category,
+                            "pricing": {
+                                "input_per_m": m.input_price_per_m,
+                                "output_per_m": m.output_price_per_m,
+                                "currency": "USD",
+                                "is_free": is_free,
+                                "request_cost": m.request_cost
+                            },
+                            "limits": {
+                                "rpm": m.rpm_limit,
+                                "rpd": m.rpd_limit,
+                                "request_cost": m.request_cost
+                            }
+                        })
+                    } else {
+                        json!({"id": model_id, "name": display})
+                    }
+                })
                 .collect();
             json!({"id": id, "name": name, "kind": kind, "models": owned})
         })
         .collect();
-    Ok(Json(json!({"providers": data})))
+    let varynth_models: Vec<Value> = all_models.iter().map(model_to_json).collect();
+    Ok(Json(json!({"providers": data, "models": varynth_models})))
 }
 
 #[derive(sqlx::FromRow)]
@@ -830,8 +856,21 @@ async fn chat(
     } else {
         None
     };
+    let plan = user_plan(&state, user.as_ref()).await?;
     if let Some(row) = &model {
-        if row.tier != "public" && user.is_none() {
+        if row.min_plan == "pro" {
+            if user.is_none() {
+                return Err(ApiError::UnauthorizedMsg(
+                    "Bu model ücretli (Pro) kategorisindedir. Kullanmak için giriş yapın: varynth login".into(),
+                ));
+            }
+            if plan != "pro" {
+                return Err(ApiError::PaymentRequired(format!(
+                    "Model '{}' requires a Pro plan (min_plan: pro, pricing: ${:.2}/1M input, ${:.2}/1M output, cost: {}x request quota). Upgrade at /pricing or configure a custom BYOK key.",
+                    row.id, row.input_price_per_m, row.output_price_per_m, row.request_cost
+                )));
+            }
+        } else if row.tier != "public" && user.is_none() {
             return Err(ApiError::Unauthorized);
         }
     } else if catalog.is_some() && user.is_none() {
@@ -839,8 +878,15 @@ async fn chat(
     } else if model.is_none() && catalog.is_none() {
         return Err(ApiError::NotFound);
     }
-    let dispatch = resolve_dispatch(model.as_ref(), catalog.as_ref(), &state.config)?;
-    enforce_chat(&state, &headers, user.as_ref(), peer.0).await?;
+    let mut dispatch = resolve_dispatch(model.as_ref(), catalog.as_ref(), &state.config)?;
+    if requested.contains('/') && requested != dispatch.public_model {
+        if let Some((req_prov, _)) = requested.split_once('/') {
+            if req_prov != "varynth" {
+                dispatch.public_model = requested.to_string();
+            }
+        }
+    }
+    enforce_chat(&state, &headers, user.as_ref(), peer.0, &plan, model.as_ref()).await?;
     let stream = body.get("stream").and_then(|value| value.as_bool()).unwrap_or(false);
     let upstream = call_upstream(&state, &dispatch, &body, stream).await?;
     Ok(match upstream {
@@ -912,24 +958,38 @@ async fn call_upstream(
     }
     let upstream_stream = stream && dispatch.upstream_kind != "worker_gateway";
     let payload = prepare_upstream_body(body.clone(), &dispatch.upstream_model, upstream_stream);
-    let bases: Vec<String> = if dispatch.upstream_kind == "worker_gateway" && !state.config.worker_gateways.is_empty() {
+    let mut targets: Vec<(String, String)> = if dispatch.upstream_kind == "worker_gateway" && !state.config.worker_gateways.is_empty() {
         let len = state.config.worker_gateways.len();
         let start = state.gateway_cursor.fetch_add(1, Ordering::Relaxed) % len;
         (0..len)
-            .map(|offset| state.config.worker_gateways[(start + offset) % len].clone())
+            .map(|offset| (state.config.worker_gateways[(start + offset) % len].clone(), key.clone()))
             .collect()
     } else {
-        vec![gateway_base(state, dispatch)]
+        vec![(gateway_base(state, dispatch), key.clone())]
     };
+    if dispatch.fallback_worker_gateway && dispatch.upstream_kind == "hrmn" {
+        if let Some(gw_key) = &state.config.worker_gateway_key {
+            let len = state.config.worker_gateways.len();
+            if len > 0 {
+                let start = state.gateway_cursor.fetch_add(1, Ordering::Relaxed) % len;
+                for offset in 0..len {
+                    targets.push((
+                        state.config.worker_gateways[(start + offset) % len].clone(),
+                        gw_key.clone(),
+                    ));
+                }
+            }
+        }
+    }
 
     let mut last_err: Option<(reqwest::StatusCode, String)> = None;
     let mut ok_text: Option<String> = None;
-    for base in bases {
+    for (base, target_key) in targets {
         let url = format!("{}/chat/completions", base.trim_end_matches('/'));
         match state
             .http
             .post(url)
-            .bearer_auth(&key)
+            .bearer_auth(&target_key)
             .json(&payload)
             .send()
             .await
@@ -1011,25 +1071,61 @@ async fn enforce_chat(
     headers: &HeaderMap,
     user: Option<&Claims>,
     peer: Option<SocketAddr>,
+    plan: &str,
+    model: Option<&ModelRow>,
 ) -> Result<(), ApiError> {
-    let plan = user_plan(state, user).await?;
-    let limits = quota(user.is_some(), &plan);
+    let limits = quota(user.is_some(), plan);
     let subject = usage_subject(user, headers, peer, &state.config);
     let now = chrono::Utc::now();
-    consume(
+    let min_b = minute_bucket(now);
+    let day_b = day_bucket(now);
+
+    if let Some(m) = model {
+        let model_min_kind = format!("chat_model_min:{}", m.id);
+        let model_day_kind = format!("chat_model_day:{}", m.id);
+        let rpm_msg = format!("model {} rate limit reached ({} RPM)", m.id, m.rpm_limit);
+        let rpd_msg = format!("model {} daily limit reached ({} RPD)", m.id, m.rpd_limit);
+        check_and_bump_weighted(
+            &state.pool,
+            &subject,
+            &model_min_kind,
+            &min_b,
+            m.rpm_limit,
+            1,
+            Some(&rpm_msg),
+        )
+        .await?;
+        check_and_bump_weighted(
+            &state.pool,
+            &subject,
+            &model_day_kind,
+            &day_b,
+            m.rpd_limit,
+            1,
+            Some(&rpd_msg),
+        )
+        .await?;
+    }
+
+    let weight = model.map(|m| m.request_cost.max(1)).unwrap_or(1);
+    check_and_bump_weighted(
         &state.pool,
         &subject,
         "chat-minute",
-        &minute_bucket(now),
+        &min_b,
         limits.chat_per_minute,
+        weight,
+        None,
     )
     .await?;
-    consume(
+    check_and_bump_weighted(
         &state.pool,
         &subject,
         "chat-day",
-        &day_bucket(now),
+        &day_b,
         limits.chat_per_day,
+        weight,
+        None,
     )
     .await?;
     Ok(())
@@ -1139,22 +1235,27 @@ fn gateway_base(state: &AppState, dispatch: &Dispatch) -> String {
 }
 
 async fn find_model(state: &AppState, requested: &str) -> Result<Option<ModelRow>, ApiError> {
-    let mut exact = sqlx::query_as::<_, ModelRow>(
-        "SELECT id, display_name, tier, upstream_kind, upstream_model, upstream_base_url, enabled
-         FROM models WHERE id = $1",
-    )
-    .bind(requested)
-    .fetch_optional(&state.pool)
-    .await?;
-    if exact.is_none() && !requested.contains('/') {
-        let prefixed = format!("varynth/{requested}");
-        exact = sqlx::query_as::<_, ModelRow>(
-            "SELECT id, display_name, tier, upstream_kind, upstream_model, upstream_base_url, enabled
-             FROM models WHERE id = $1",
-        )
-        .bind(prefixed)
+    let query = format!("SELECT {MODEL_SELECT_COLUMNS} FROM models WHERE id = $1");
+    let mut exact = sqlx::query_as::<_, ModelRow>(&query)
+        .bind(requested)
         .fetch_optional(&state.pool)
         .await?;
+    if exact.is_none() {
+        if let Some((_, short_id)) = requested.split_once('/') {
+            let varynth_prefixed = format!("varynth/{short_id}");
+            if varynth_prefixed != requested {
+                exact = sqlx::query_as::<_, ModelRow>(&query)
+                    .bind(varynth_prefixed)
+                    .fetch_optional(&state.pool)
+                    .await?;
+            }
+        } else {
+            let prefixed = format!("varynth/{requested}");
+            exact = sqlx::query_as::<_, ModelRow>(&query)
+                .bind(prefixed)
+                .fetch_optional(&state.pool)
+                .await?;
+        }
     }
     if let Some(ref mut row) = exact {
         if row.id.starts_with("varynth/public-")
@@ -2132,6 +2233,8 @@ mod tests {
             openai_key: None,
             anthropic_key: None,
             openrouter_key: None,
+            hrmn_base_url: "https://api.hrmn.tr/v1".into(),
+            hrmn_api_key: None,
             worker_gateways: Vec::new(),
             worker_gateway_key: None,
             parallel_keys: Vec::new(),

@@ -95,6 +95,46 @@ pub async fn consume_message(
     }
 }
 
+/// Weighted quota counter that increments by `weight` (>= 1) per call, used for
+/// weighted model `request_cost` and per-model rate limiting (`rpm_limit`, `rpd_limit`).
+pub async fn check_and_bump_weighted(
+    pool: &sqlx::PgPool,
+    subject: &str,
+    kind: &str,
+    bucket: &str,
+    limit: i32,
+    weight: i32,
+    message: Option<&str>,
+) -> Result<i32, ApiError> {
+    let w = weight.max(1);
+    if limit <= 0 {
+        return Err(ApiError::RateLimited(
+            message.unwrap_or("limit reached").to_string(),
+        ));
+    }
+    let count = sqlx::query_scalar::<_, i32>(
+        "INSERT INTO usage_counters (subject, kind, bucket, count)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (subject, kind, bucket)
+         DO UPDATE SET count = usage_counters.count + $4
+         RETURNING count",
+    )
+    .bind(subject)
+    .bind(kind)
+    .bind(bucket)
+    .bind(w)
+    .fetch_one(pool)
+    .await?;
+    if count > limit {
+        Err(ApiError::RateLimited(match message {
+            Some(message) => message.to_string(),
+            None => format!("{kind} limit reached ({limit} per window)"),
+        }))
+    } else {
+        Ok(count)
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct LockoutPolicy {
     pub max_failures: u32,

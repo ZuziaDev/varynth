@@ -9,10 +9,51 @@ pub struct ModelRow {
     pub id: String,
     pub display_name: String,
     pub tier: String,
+    pub min_plan: String,
+    pub category: String,
     pub upstream_kind: String,
     pub upstream_model: String,
     pub upstream_base_url: String,
     pub enabled: bool,
+    pub input_price_per_m: f64,
+    pub output_price_per_m: f64,
+    pub request_cost: i32,
+    pub rpm_limit: i32,
+    pub rpd_limit: i32,
+}
+
+pub const MODEL_SELECT_COLUMNS: &str = "id, display_name, tier, min_plan, category, upstream_kind, upstream_model, upstream_base_url, enabled, input_price_per_m::float8 AS input_price_per_m, output_price_per_m::float8 AS output_price_per_m, request_cost, rpm_limit, rpd_limit";
+
+pub fn model_to_json(row: &ModelRow) -> Value {
+    let is_free = row.min_plan == "free" || (row.input_price_per_m == 0.0 && row.output_price_per_m == 0.0);
+    json!({
+        "id": row.id,
+        "display_name": row.display_name,
+        "owned_by": "varynth",
+        "tier": row.tier,
+        "min_plan": row.min_plan,
+        "category": row.category,
+        "pricing": {
+            "input_per_m": row.input_price_per_m,
+            "output_per_m": row.output_price_per_m,
+            "currency": "USD",
+            "is_free": is_free,
+            "request_cost": row.request_cost
+        },
+        "limits": {
+            "rpm": row.rpm_limit,
+            "rpd": row.rpd_limit,
+            "request_cost": row.request_cost
+        }
+    })
+}
+
+pub async fn list_all_enabled_models(pool: &sqlx::PgPool) -> Result<Vec<ModelRow>, ApiError> {
+    let query = format!(
+        "SELECT {MODEL_SELECT_COLUMNS} FROM models WHERE enabled = true ORDER BY sort_order, id"
+    );
+    let rows = sqlx::query_as::<_, ModelRow>(&query).fetch_all(pool).await?;
+    Ok(rows)
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -28,6 +69,7 @@ pub struct Dispatch {
     pub upstream_kind: String,
     pub upstream_model: String,
     pub upstream_base: String,
+    pub fallback_worker_gateway: bool,
     pub stub: bool,
 }
 
@@ -40,18 +82,26 @@ pub fn resolve_dispatch(
         if !row.enabled {
             return Err(ApiError::NotFound);
         }
-        let base = workers_base(row, cfg);
+        let mut kind = row.upstream_kind.clone();
+        let mut base = workers_base(row, cfg);
+        let is_free_hrmn = row.min_plan == "free" && row.upstream_kind == "hrmn";
+        let has_worker_gw = cfg.worker_gateway_key.is_some() && !cfg.worker_gateways.is_empty();
+        if is_free_hrmn && cfg.upstream_key("hrmn").is_none() && has_worker_gw {
+            kind = "worker_gateway".to_string();
+            base = String::new();
+        }
         let upstream_model = if row.upstream_model.is_empty() {
             row.id.clone()
         } else {
             row.upstream_model.clone()
         };
-        let stub = should_stub(cfg, &row.upstream_kind, &base);
+        let stub = should_stub(cfg, &kind, &base);
         return Ok(Dispatch {
             public_model: row.id.clone(),
-            upstream_kind: row.upstream_kind.clone(),
+            upstream_kind: kind,
             upstream_model,
             upstream_base: base,
+            fallback_worker_gateway: is_free_hrmn && has_worker_gw,
             stub,
         });
     }
@@ -59,13 +109,14 @@ pub fn resolve_dispatch(
         return Err(ApiError::NotFound);
     };
     let (mut base, mut kind) = catalog_upstream(&row.provider_id, &row.kind);
-    if !cfg.stub_upstream
-        && cfg.upstream_key(kind).is_none()
-        && cfg.worker_gateway_key.is_some()
-        && !cfg.worker_gateways.is_empty()
-    {
-        base = "";
-        kind = "worker_gateway";
+    if !cfg.stub_upstream && cfg.upstream_key(kind).is_none() {
+        if cfg.hrmn_api_key.is_some() {
+            base = cfg.hrmn_base_url.as_str();
+            kind = "hrmn";
+        } else if cfg.worker_gateway_key.is_some() && !cfg.worker_gateways.is_empty() {
+            base = "";
+            kind = "worker_gateway";
+        }
     }
     let stub = should_stub(cfg, kind, base);
     Ok(Dispatch {
@@ -73,11 +124,21 @@ pub fn resolve_dispatch(
         upstream_kind: kind.to_string(),
         upstream_model: row.model_id.clone(),
         upstream_base: base.to_string(),
+        fallback_worker_gateway: false,
         stub,
     })
 }
 
 fn workers_base(row: &ModelRow, cfg: &Config) -> String {
+    if row.upstream_kind == "hrmn" {
+        if !cfg.hrmn_base_url.is_empty() {
+            return cfg.hrmn_base_url.clone();
+        }
+        if !row.upstream_base_url.is_empty() {
+            return row.upstream_base_url.clone();
+        }
+        return "https://api.hrmn.tr/v1".to_string();
+    }
     if !row.upstream_base_url.is_empty() {
         return row.upstream_base_url.clone();
     }
@@ -357,6 +418,8 @@ mod tests {
             openai_key: None,
             anthropic_key: None,
             openrouter_key: None,
+            hrmn_base_url: "https://api.hrmn.tr/v1".into(),
+            hrmn_api_key: None,
             worker_gateways: Vec::new(),
             worker_gateway_key: None,
             parallel_keys: Vec::new(),
@@ -376,10 +439,17 @@ mod tests {
             id: "varynth/public-1".into(),
             display_name: "Varynth Public 1".into(),
             tier: "public".into(),
+            min_plan: "free".into(),
+            category: "reasoning".into(),
             upstream_kind: "workers_ai".into(),
             upstream_model: "hidden".into(),
             upstream_base_url: String::new(),
             enabled: true,
+            input_price_per_m: 0.0,
+            output_price_per_m: 0.0,
+            request_cost: 1,
+            rpm_limit: 20,
+            rpd_limit: 100,
         };
         let dispatch = resolve_dispatch(Some(&row), None, &cfg(false)).unwrap();
         assert!(dispatch.stub);
@@ -394,5 +464,45 @@ mod tests {
         let rewritten = rewrite_sse(raw, "varynth/public-1");
         assert!(rewritten.contains("varynth/public-1"));
         assert!(!rewritten.contains("hidden"));
+    }
+
+    #[test]
+    fn hrmn_dispatch_and_model_json_include_pricing_and_limits() {
+        let row = ModelRow {
+            id: "varynth/claude-opus-4-8".into(),
+            display_name: "Anthropic Claude Opus 4.8 (Flagship Reasoning · Coding)".into(),
+            tier: "account".into(),
+            min_plan: "pro".into(),
+            category: "reasoning".into(),
+            upstream_kind: "hrmn".into(),
+            upstream_model: "claude-opus-4-8".into(),
+            upstream_base_url: "https://api.hrmn.tr/v1".into(),
+            enabled: true,
+            input_price_per_m: 15.0,
+            output_price_per_m: 75.0,
+            request_cost: 5,
+            rpm_limit: 15,
+            rpd_limit: 200,
+        };
+        let mut c = cfg(false);
+        c.hrmn_api_key = Some("mock_hrmn_test_key".into());
+        let dispatch = resolve_dispatch(Some(&row), None, &c).unwrap();
+        assert!(!dispatch.stub);
+        assert_eq!(dispatch.upstream_kind, "hrmn");
+        assert_eq!(dispatch.upstream_model, "claude-opus-4-8");
+        assert_eq!(dispatch.upstream_base, "https://api.hrmn.tr/v1");
+
+        let json_val = model_to_json(&row);
+        assert_eq!(json_val["id"], "varynth/claude-opus-4-8");
+        assert_eq!(json_val["min_plan"], "pro");
+        assert_eq!(json_val["category"], "reasoning");
+        assert_eq!(json_val["pricing"]["input_per_m"], 15.0);
+        assert_eq!(json_val["pricing"]["output_per_m"], 75.0);
+        assert_eq!(json_val["pricing"]["is_free"], false);
+        assert_eq!(json_val["pricing"]["request_cost"], 5);
+        assert_eq!(json_val["limits"]["rpm"], 15);
+        assert_eq!(json_val["limits"]["rpd"], 200);
+        assert_eq!(json_val["limits"]["request_cost"], 5);
+        assert!(public_json_is_clean(&json_val.to_string()));
     }
 }
