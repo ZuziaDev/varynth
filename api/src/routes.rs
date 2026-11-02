@@ -84,6 +84,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/v1/models/public", get(public_models))
         .route("/v1/models", get(public_models))
+        .route("/v1/models/sync", post(sync_models_route))
         .route("/v1/plans", get(plans))
         .route("/v1/chat/completions", post(chat))
         .route("/v1/search", post(search_route))
@@ -281,11 +282,11 @@ async fn catalog(
             let owned: Vec<Value> = models
                 .iter()
                 .filter(|(provider, _, _)| provider == &id)
-                .map(|(_, model_id, display)| {
+                .filter_map(|(_, model_id, display)| {
                     let varynth_id = format!("varynth/{model_id}");
                     if let Some(m) = all_models.iter().find(|r| r.id == varynth_id || r.upstream_model == *model_id) {
                         let is_free = m.min_plan == "free" || (m.input_price_per_m == 0.0 && m.output_price_per_m == 0.0);
-                        json!({
+                        Some(json!({
                             "id": model_id,
                             "varynth_id": m.id,
                             "name": display,
@@ -305,9 +306,9 @@ async fn catalog(
                                 "rpd": m.rpd_limit,
                                 "request_cost": m.request_cost
                             }
-                        })
+                        }))
                     } else {
-                        json!({"id": model_id, "name": display})
+                        None
                     }
                 })
                 .collect();
@@ -316,6 +317,18 @@ async fn catalog(
         .collect();
     let varynth_models: Vec<Value> = all_models.iter().map(model_to_json).collect();
     Ok(Json(json!({"providers": data, "models": varynth_models})))
+}
+
+async fn sync_models_route(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let _user = require_user(&state, &headers, &["cli", "web"]).await?;
+    let report = crate::model_sync::sync_models_with_upstream(&state).await?;
+    Ok(Json(json!({
+        "status": "ok",
+        "report": report
+    })))
 }
 
 #[derive(sqlx::FromRow)]

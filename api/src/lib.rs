@@ -8,6 +8,7 @@ pub mod crypto;
 pub mod db;
 pub mod error;
 pub mod limits;
+pub mod model_sync;
 pub mod routes;
 pub mod search;
 
@@ -19,6 +20,12 @@ pub async fn serve(cfg: Config) -> Result<(), Box<dyn std::error::Error>> {
     db::prepare(&pool, &cfg).await?;
     let bind = cfg.bind.clone();
     let state = AppState::new(pool, Arc::new(cfg), http_client()?);
+
+    let sync_state = state.clone();
+    tokio::spawn(async move {
+        model_sync::run_periodic_sync(sync_state, std::time::Duration::from_secs(300)).await;
+    });
+
     let addr: SocketAddr = bind.parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(%addr, "varynth-api listening");
