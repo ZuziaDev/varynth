@@ -26,3 +26,6 @@ Thumbs.db
 *.exe
 .hallmark/
 **/.hallmark/
+
+# Local tool caches
+.impeccable/

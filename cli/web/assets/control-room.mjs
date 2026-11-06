@@ -1,6 +1,7 @@
 import {
   SseDecoder, ApprovalLedger, normalizeApproval, selectedAfterRefresh,
   matchesSessionQuery, messageParts, eventMatchesFilter, relativeTime,
+  channelRows, composerKeyAction,
   formatNumber, formatDuration, formatUptime, percentOf, parseContext,
   messageImageSources, autocompactLabel, approvalFromPending,
   parseThemeInput, validateThemeTokens, THEME_TOKENS, safeImageSource,
@@ -238,7 +239,11 @@ function setTab(tab) {
   if (tab === 'approvals') void loadPendingApprovals();
 }
 
-function closeDrawers() {
+let drawerReturnFocus = null;
+function closeDrawers({ restoreFocus = true } = {}) {
+  const wasOpen = $('session-rail').classList.contains('open') || $('inspector').classList.contains('open');
+  if (restoreFocus && wasOpen && drawerReturnFocus?.isConnected) drawerReturnFocus.focus();
+  drawerReturnFocus = null;
   $('session-rail').classList.remove('open');
   $('inspector').classList.remove('open');
   $('drawer-backdrop').hidden = true;
@@ -256,9 +261,13 @@ function toggleDrawer(kind) {
   const open = !element.classList.contains('open');
   closeDrawers();
   if (open) {
+    const toggle = $(`${kind === 'sessions' ? 'sessions' : 'inspector'}-toggle`);
+    const active = document.activeElement;
+    drawerReturnFocus = (active instanceof HTMLElement && active !== document.body) ? active : toggle;
     element.classList.add('open');
     $('drawer-backdrop').hidden = false;
-    $(`${kind === 'sessions' ? 'sessions' : 'inspector'}-toggle`).setAttribute('aria-expanded', 'true');
+    toggle.setAttribute('aria-expanded', 'true');
+    $(kind === 'sessions' ? 'sessions-close' : 'inspector-close').focus({ preventScroll: true });
   }
 }
 
@@ -307,7 +316,8 @@ function renderIdentity() {
   const paused = state.paused.get(state.selectedSessionId) === true;
   const pending = [...approvals.pending.values()].some((a) => a.session === state.selectedSessionId);
   const running = state.status?.busy && state.selectedSessionId === state.serverSessionId;
-  $('runtime-state').textContent = paused ? 'Paused' : pending ? 'Needs approval' : running ? 'Running' : 'Idle';
+  const runtimeState = paused ? 'Paused' : pending ? 'Needs approval' : running ? 'Running' : 'Idle';
+  if ($('runtime-state').textContent !== runtimeState) $('runtime-state').textContent = runtimeState;
   $('runtime-state').className = `runtime-state ${pending ? 'waiting' : running ? 'running' : ''}`;
   $('pause-session').setAttribute('aria-label', paused ? 'Resume session' : 'Pause session');
   $('pause-session').title = paused ? 'Resume session' : 'Pause at the next model boundary';
@@ -331,7 +341,8 @@ function renderControls() {
   $('session-resume').disabled = !hasSession;
   $('resume-copy').disabled = !hasSession;
   $('resume-command').textContent = state.selectedSessionId ? `varynth resume ${state.selectedSessionId}` : 'varynth resume <id>';
-  $('composer-status').textContent = state.sending ? 'Running' : paused ? 'Paused' : runtimeBusy ? 'Busy' : state.attachments.length ? `${state.attachments.length} attached` : 'Ready';
+  const composerStatus = state.sending ? 'Running' : paused ? 'Paused' : runtimeBusy ? 'Busy' : state.attachments.length ? `${state.attachments.length} attached` : 'Ready';
+  if ($('composer-status').textContent !== composerStatus) $('composer-status').textContent = composerStatus;
   $('send').querySelector('span').textContent = state.sending ? 'Running' : 'Send';
   renderAttachmentChips();
   renderIdentity();
@@ -377,7 +388,7 @@ function renderStatus(status) {
   for (const name of state.skillsExpanded ? skillNames : skillNames.slice(0, 8)) {
     const button = node('button', 'skill-button', `/${name}`);
     button.type = 'button';
-    button.addEventListener('click', () => { $('input').value = `/${name} `; setTab('conversation'); $('input').focus(); renderControls(); closeDrawers(); });
+    button.addEventListener('click', () => { $('input').value = `/${name} `; setTab('conversation'); $('input').focus(); renderControls(); closeDrawers({ restoreFocus: false }); });
     $('skills').append(button);
   }
   if (skillNames.length > 8) {
@@ -506,7 +517,7 @@ async function loadSession(id, force = false) {
   renderControls();
   setTab('conversation');
   void loadCheckpoints(id);
-  closeDrawers();
+  closeDrawers({ restoreFocus: false });
 }
 
 async function refresh({ transcript = false } = {}) {
@@ -1444,18 +1455,48 @@ async function healthChecks() {
 
 async function channels() {
   try {
-    const result = await api('/api/channels');
+    const { rows, note } = channelRows(await api('/api/channels'));
     $('channels').replaceChildren();
-    for (const [key, value] of Object.entries(result)) {
-      if (key === 'note' || typeof value !== 'string') continue;
-      const row = node('div');
-      row.append(node('dt', '', key.charAt(0).toUpperCase() + key.slice(1)), node('dd', '', value));
+    for (const channel of rows) {
+      const row = node('div', `channel-row ${channel.tone}`);
+      const value = node('dd');
+      const dot = node('span', `status-dot ${channel.tone === 'good' ? 'good' : channel.tone === 'waiting' ? 'waiting' : ''}`);
+      dot.setAttribute('aria-hidden', 'true');
+      value.append(dot, node('span', '', channel.label));
+      if (channel.detail) value.title = channel.detail;
+      if (channel.detail && channel.tone !== 'planned') {
+        value.append(node('small', 'channel-detail', channel.detail));
+      }
+      row.append(node('dt', '', channel.name), value);
       $('channels').append(row);
     }
-  } catch (error) { $('channels').replaceChildren(node('div', 'muted', errorText(error))); }
+    if (!rows.length) $('channels').append(node('div', 'muted', 'No channels reported.'));
+    const live = rows.filter((channel) => channel.tone === 'good').length;
+    $('channels-summary').textContent = rows.length ? `${live} of ${rows.length} live` : '';
+    $('channels-note').textContent = note;
+    $('channels-note').hidden = !note;
+  } catch (error) {
+    $('channels').replaceChildren(node('div', 'muted', `Channel status unavailable: ${errorText(error)}`));
+    $('channels-summary').textContent = '';
+    $('channels-note').hidden = true;
+  }
 }
 
 $('input').addEventListener('input', renderControls);
+$('input').addEventListener('keydown', (event) => {
+  const touch = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+  if (composerKeyAction(event, { touch }) !== 'send') return;
+  if ($('send').disabled) return;
+  event.preventDefault();
+  $('form').requestSubmit();
+});
+(() => {
+  const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+  if (!coarse) return;
+  $('composer-hint').textContent = 'Ctrl+Enter to send · Enter for new line';
+  const emptyHint = document.querySelector('.conversation-empty p');
+  if (emptyHint) emptyHint.textContent = 'Choose a model below, then type an instruction or /goal to start. Ctrl+Enter sends, Enter adds a new line.';
+})();
 $('form').addEventListener('submit', (event) => { void sendMessage(event); });
 $('session-search').addEventListener('input', renderSessions);
 $('new-session').addEventListener('click', () => { void newSession(); });
@@ -1523,7 +1564,9 @@ $('inspector-close').addEventListener('click', () => {
   else toggleDrawer('inspector');
 });
 $('drawer-backdrop').addEventListener('click', closeDrawers);
-document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeDrawers(); });
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !document.querySelector('dialog[open]')) closeDrawers();
+});
 $('event-filter').addEventListener('change', renderEvents);
 $('clear-events').addEventListener('click', () => { state.events = []; $('activity-count').textContent = '0'; renderEvents(); });
 $('check-health').addEventListener('click', () => { void healthChecks(); });
@@ -1693,7 +1736,7 @@ if (gateForm) {
       if ($('gateway-token')) $('gateway-token').value = entered;
       const modal = $('auth-gate-modal');
       if (modal && modal.open) modal.close();
-      toast('Unlocked Varynth Serve Deck');
+      toast('Control Room unlocked');
       try { await connectGateway(); } catch (_) {}
       try { await refresh({ transcript: true }); } catch (_) {}
     } catch (err) {

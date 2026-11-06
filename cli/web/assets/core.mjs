@@ -195,6 +195,39 @@ export function percentOf(value, total) {
   return Math.min(100, Math.round((part / whole) * 100));
 }
 
+/// Maps `GET /api/channels` into display rows with a status tone. Only string
+/// values are shown; the free-text `note` is returned separately.
+export function channelRows(result) {
+  const rows = [];
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return { rows, note: '' };
+  for (const [key, raw] of Object.entries(result)) {
+    if (key === 'note' || typeof raw !== 'string') continue;
+    const value = raw.trim();
+    const lower = value.toLowerCase();
+    let tone = 'off';
+    let label = 'Off';
+    if (lower === 'live') { tone = 'good'; label = 'Live'; }
+    else if (lower === 'planned') { tone = 'planned'; label = 'Planned'; }
+    else if (lower.includes('pairing')) { tone = 'waiting'; label = 'Pairing'; }
+    else if (!lower.startsWith('off')) { tone = 'waiting'; label = value.slice(0, 40) || 'Unknown'; }
+    const detail = label.toLowerCase() === lower ? '' : value;
+    rows.push({ name: key.charAt(0).toUpperCase() + key.slice(1), tone, label, detail });
+  }
+  return { rows, note: typeof result.note === 'string' ? result.note : '' };
+}
+
+/// Composer key policy: Enter sends, Shift+Enter inserts a newline, IME
+/// composition is never interrupted. Ctrl/Cmd+Enter also sends. On touch
+/// (coarse pointer) devices there is no Shift key in practice, so plain Enter
+/// keeps its newline meaning and only Ctrl/Cmd+Enter sends.
+export function composerKeyAction(event, { touch = false } = {}) {
+  if (!event || event.key !== 'Enter' || event.isComposing || event.keyCode === 229) return 'none';
+  if (event.ctrlKey || event.metaKey) return 'send';
+  if (touch) return 'none';
+  if (event.shiftKey || event.altKey) return 'none';
+  return 'send';
+}
+
 export function parseContext(text) {
   const messages = JSON.parse(text);
   if (!Array.isArray(messages) || messages.length > 200) {
