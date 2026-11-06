@@ -1,0 +1,10 @@
+# Shell scripts must stay LF so they run on Linux, whatever the host checks out on.
+*.sh text eol=lf
+
+# Binary assets: never normalize line endings.
+*.woff2 binary
+*.png   binary
+*.jpg   binary
+*.ico   binary
+*.exe   binary
+*.pdb   binary

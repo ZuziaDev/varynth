@@ -1,0 +1,25 @@
+[Unit]
+Description=Varynth web console (Next.js)
+After=network-online.target varynth-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=varynth
+Group=varynth
+WorkingDirectory=/opt/varynth/src/web
+EnvironmentFile=/etc/varynth/web.env
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=HOSTNAME=127.0.0.1
+ExecStart=/opt/varynth/src/web/node_modules/.bin/next start -p 3000 -H 127.0.0.1
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=-/opt/varynth/src/web/.next
+
+[Install]
+WantedBy=multi-user.target

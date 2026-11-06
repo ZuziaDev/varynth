@@ -4,8 +4,44 @@ import {
   ApprovalLedger, normalizeApproval, parseContext, selectedAfterRefresh,
   SseDecoder, messageParts, eventMatchesFilter, matchesSessionQuery,
   autocompactLabel, approvalFromPending, isRelayId, formatUptime, percentOf,
+  channelRows, composerKeyAction,
 } from '../assets/core.mjs';
 import { sideBySideRows, parseUnifiedDiff } from '../assets/diff.mjs';
+
+test('channel rows map server status strings to tones', () => {
+  const { rows, note } = channelRows({
+    telegram: 'token set, pairing (empty allowlist)',
+    discord: 'planned',
+    dashboard: 'live',
+    whatsapp: 'off — set VARYNTH_TELEGRAM_BOT_TOKEN',
+    extra: 42,
+    note: 'Polls while serve runs.',
+  });
+  assert.equal(note, 'Polls while serve runs.');
+  assert.deepEqual(rows.map((row) => [row.name, row.tone, row.label]), [
+    ['Telegram', 'waiting', 'Pairing'],
+    ['Discord', 'planned', 'Planned'],
+    ['Dashboard', 'good', 'Live'],
+    ['Whatsapp', 'off', 'Off'],
+  ]);
+  assert.equal(rows[2].detail, '');
+  assert.match(rows[3].detail, /VARYNTH_TELEGRAM_BOT_TOKEN/);
+  assert.deepEqual(channelRows(null), { rows: [], note: '' });
+  assert.deepEqual(channelRows([1]), { rows: [], note: '' });
+});
+
+test('composer key action sends on Enter but respects Shift and IME', () => {
+  assert.equal(composerKeyAction({ key: 'Enter' }), 'send');
+  assert.equal(composerKeyAction({ key: 'Enter', ctrlKey: true }), 'send');
+  assert.equal(composerKeyAction({ key: 'Enter', shiftKey: true }), 'none');
+  assert.equal(composerKeyAction({ key: 'Enter', isComposing: true }), 'none');
+  assert.equal(composerKeyAction({ key: 'Enter', keyCode: 229 }), 'none');
+  assert.equal(composerKeyAction({ key: 'a' }), 'none');
+  assert.equal(composerKeyAction(null), 'none');
+  // Touch: plain Enter inserts a newline; Ctrl/Cmd+Enter still sends.
+  assert.equal(composerKeyAction({ key: 'Enter' }, { touch: true }), 'none');
+  assert.equal(composerKeyAction({ key: 'Enter', metaKey: true }, { touch: true }), 'send');
+});
 
 const ID = '12345678-1234-1234-1234-123456789012';
 
